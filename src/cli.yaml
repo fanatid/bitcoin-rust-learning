@@ -1,0 +1,14 @@
+name: "REPLACEME"
+about: Learning Rust through simple abstract application for monitoring bitcoin transactions
+subcommands:
+  - client:
+      about: Run WS client for transactions monitoring
+  - server:
+      about: Run monitoring server
+      args:
+        - bitcoind:
+            long: bitcoind
+            required: true
+            takes_value: true
+            env: BITCOIND
+            default_value: http://bitcoinrpc:password@localhost:8332/
