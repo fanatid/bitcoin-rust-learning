@@ -61,6 +61,7 @@ async fn sync_loop(mut state: AppState, rpc: RPCClient) {
                                     .previousblockhash
                                     .expect("Previous block hash should be defined"),
                             });
+                            state.blocks.pop_front();
                             info!("Add block {}: {}", block.height, block.hash);
                             continue;
                         }

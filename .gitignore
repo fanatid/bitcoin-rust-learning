@@ -1,1 +1,4 @@
 /target
+
+src/cli.yaml.name
+src/cli.yaml.version
