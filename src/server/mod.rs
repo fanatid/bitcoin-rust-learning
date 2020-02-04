@@ -1,7 +1,7 @@
 use std::time::{Duration, SystemTime};
 
 use clap::ArgMatches;
-use log::info;
+use log::{error, info};
 
 mod app_state;
 mod bitcoind;
@@ -11,14 +11,24 @@ use bitcoin_rust_learning::logger;
 use bitcoind::RPCClient;
 
 // Run server for monitoring bitcoin transactions
-pub fn main(args: &ArgMatches) {
+pub fn main(args: &ArgMatches) -> i32 {
     logger::init();
 
+    if let Some(error) = run(args).err() {
+        error!("{}", error);
+        return 1;
+    }
+
+    0
+}
+
+fn run(args: &ArgMatches) -> Result<(), Box<dyn std::fmt::Display>> {
     let state = AppState::default();
     let rpc = RPCClient::new(args.value_of("bitcoind").unwrap());
 
     let fut = sync_loop(state, rpc);
     actix_rt::System::new("sync_loop").block_on(fut);
+    Ok(())
 }
 
 // Bitcoind synchronize loop

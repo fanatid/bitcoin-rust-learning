@@ -1,6 +1,10 @@
 name: REPLACEME
 version: REPLACEME
 about: Learning Rust through simple abstract application for monitoring bitcoin transactions
+settings:
+  - DeriveDisplayOrder
+  - SubcommandRequired
+  - VersionlessSubcommands
 subcommands:
   - client:
       about: Run WS client for transactions monitoring

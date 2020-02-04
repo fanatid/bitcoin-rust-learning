@@ -9,13 +9,11 @@ fn main() {
         .version(include_str!("./cli.yaml.version").trim())
         .get_matches();
 
-    match args.subcommand() {
-        ("client", Some(sub_m)) => {
-            client::main(sub_m);
-        }
-        ("server", Some(sub_m)) => {
-            server::main(sub_m);
-        }
-        _ => {}
-    }
+    let code = match args.subcommand() {
+        ("client", Some(args)) => client::main(args),
+        ("server", Some(args)) => server::main(args),
+        _ => 1,
+    };
+
+    std::process::exit(code);
 }
