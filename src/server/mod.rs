@@ -1,3 +1,5 @@
+use std::error::Error;
+use std::fmt;
 use std::time::{Duration, SystemTime};
 
 use clap::ArgMatches;
@@ -8,9 +10,30 @@ mod bitcoind;
 
 use app_state::{AppState, Block};
 use bitcoin_rust_learning::logger;
-use bitcoind::RPCClient;
+use bitcoind::rpc::{RPCClient, RPCClientError};
 
-// Run server for monitoring bitcoin transactions
+#[derive(Debug)]
+enum ServerError {
+    Bitcoind(RPCClientError),
+}
+
+impl fmt::Display for ServerError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            Self::Bitcoind(ref e) => e.fmt(f),
+        }
+    }
+}
+
+impl Error for ServerError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match *self {
+            Self::Bitcoind(ref e) => Some(e),
+        }
+    }
+}
+
+// Initialize logging and execute run function
 pub fn main(args: &ArgMatches) -> i32 {
     logger::init();
 
@@ -22,17 +45,25 @@ pub fn main(args: &ArgMatches) -> i32 {
     0
 }
 
-fn run(args: &ArgMatches) -> Result<(), Box<dyn std::fmt::Display>> {
-    let state = AppState::default();
-    let rpc = RPCClient::new(args.value_of("bitcoind").unwrap());
+// Run server for monitoring bitcoin transactions
+fn run(args: &ArgMatches) -> Result<(), ServerError> {
+    // unwrap values from args, because existence should be validated by clap
+    let bitcoind_url = args.value_of("bitcoind").unwrap();
 
-    let fut = sync_loop(state, rpc);
-    actix_rt::System::new("sync_loop").block_on(fut);
+    // create required structs
+    let state = AppState::default();
+    let rpc = RPCClient::new(bitcoind_url).map_err(ServerError::Bitcoind)?;
+
+    // run loop
+    // TODO: add Result as return type
+    let loop_sync = run_loop_sync(state, rpc);
+    actix_rt::System::new("loop_sync").block_on(loop_sync);
+
     Ok(())
 }
 
 // Bitcoind synchronize loop
-async fn sync_loop(mut state: AppState, rpc: RPCClient) {
+async fn run_loop_sync(mut state: AppState, rpc: RPCClient) {
     loop {
         while state.blocks.len() < 6 {
             let hash = if state.blocks.is_empty() {

@@ -12,7 +12,7 @@ fn main() {
     let code = match args.subcommand() {
         ("client", Some(args)) => client::main(args),
         ("server", Some(args)) => server::main(args),
-        _ => 1,
+        _ => 1, // not possible, but we need to cover this arm
     };
 
     std::process::exit(code);
