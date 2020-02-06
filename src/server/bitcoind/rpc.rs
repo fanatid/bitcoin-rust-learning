@@ -18,6 +18,7 @@ pub enum RPCClientError {
     ResponseInvalidNonce(String),
     ResponseResultError(ResponseError),
     ResponseResultNotFound(String),
+    ResponseResultMismatch,
 }
 
 impl fmt::Display for RPCClientError {
@@ -39,6 +40,7 @@ impl fmt::Display for RPCClientError {
             ResponseResultNotFound(ref method) => {
                 write!(f, r#"Not found result for: "{}""#, method)
             }
+            ResponseResultMismatch => write!(f, "todo"),
         }
     }
 }
@@ -155,9 +157,32 @@ impl RPCClient {
         self.call("getblockchaininfo", None).await
     }
 
-    pub async fn getblockheader(&self, hash: &str) -> Result<ResponseBlockHeader, RPCClientError> {
+    pub async fn getblockheader(
+        &self,
+        hash: &str,
+    ) -> Result<Option<ResponseBlockHeader>, RPCClientError> {
         let params = [hash.into(), true.into()];
-        self.call("getblockheader", Some(&params)).await
+        match self
+            .call::<ResponseBlockHeader>("getblockheader", Some(&params))
+            .await
+        {
+            // Add genereic checks?
+            Ok(data) => {
+                if data.hash == hash {
+                    Ok(Some(data))
+                } else {
+                    Err(RPCClientError::ResponseResultMismatch)
+                }
+            }
+            Err(RPCClientError::ResponseResultError(error)) => {
+                if error.code == -5 {
+                    Ok(None)
+                } else {
+                    Err(RPCClientError::ResponseResultError(error))
+                }
+            }
+            Err(err) => Err(err),
+        }
     }
 }
 

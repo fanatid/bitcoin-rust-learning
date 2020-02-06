@@ -14,12 +14,15 @@ use bitcoind::rpc::{RPCClient, RPCClientError};
 #[derive(Debug)]
 enum ServerError {
     Bitcoind(RPCClientError),
+    NotEnoughBlocks,
 }
 
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use ServerError::*;
         match *self {
-            Self::Bitcoind(ref e) => write!(f, "bitcoind: {}", e),
+            Bitcoind(ref e) => write!(f, "bitcoind: {}", e),
+            NotEnoughBlocks => write!(f, "Not enough blocks for app"),
         }
     }
 }
@@ -55,67 +58,69 @@ fn run(args: &ArgMatches) -> Result<(), ServerError> {
 // Bitcoind synchronize loop
 async fn run_loop_sync(mut state: AppState, rpc: RPCClient) -> Result<(), ServerError> {
     loop {
-        while state.blocks.len() < 6 {
-            let hash = if state.blocks.is_empty() {
+        // Keep at least 6 blocks in state
+        while state.blocks_len() < 6 {
+            // Get prevhash from first known block or just get tip
+            let hash = if let Some(block) = state.blocks_first() {
+                match block.prevhash {
+                    None => return Err(ServerError::NotEnoughBlocks),
+                    Some(ref hash) => hash.clone(),
+                }
+            } else {
                 rpc.getblockchaininfo()
                     .await
                     .map_err(ServerError::Bitcoind)?
                     .bestblockhash
-            } else {
-                state.blocks.front().unwrap().prevhash.clone()
             };
 
-            match rpc.getblockheader(&hash).await {
-                Ok(block) => {
-                    state.blocks.push_front(Block {
-                        height: block.height,
-                        hash: hash.clone(),
-                        prevhash: block
-                            .previousblockhash
-                            .expect("Previous block hash should be defined"),
-                    });
-                    info!("Add block {}: {}", block.height, block.hash);
-                }
-                Err(err) => match err {
-                    RPCClientError::ResponseResultNotFound(_) => state.blocks.clear(),
-                    _ => return Err(ServerError::Bitcoind(err)),
-                },
-            }
+            // Try fetch header
+            let header = rpc
+                .getblockheader(&hash)
+                .await
+                .map_err(ServerError::Bitcoind)?;
+
+            // If header not found or error on adding block, reset state
+            if let Some(header) = header {
+                if let Ok(block) = state.blocks_push_front(Block::from(header)) {
+                    info!("Add block {}: {}", block.height, &block.hash);
+                    continue;
+                };
+            };
+
+            state.reset();
         }
 
+        // Save current timestamp for timeout after check
         let ts = SystemTime::now();
 
-        let last = state.blocks.back().unwrap();
-        match rpc.getblockheader(&last.hash).await {
-            Ok(block) => {
-                if let Some(hash) = block.nextblockhash {
-                    match rpc.getblockheader(&hash).await {
-                        Ok(block) => {
-                            state.blocks.push_back(Block {
-                                height: block.height,
-                                hash: block.hash.clone(),
-                                prevhash: block
-                                    .previousblockhash
-                                    .expect("Previous block hash should be defined"),
-                            });
-                            state.blocks.pop_front();
-                            info!("Add block {}: {}", block.height, block.hash);
-                            continue;
-                        }
-                        Err(err) => match err {
-                            RPCClientError::ResponseResultNotFound(_) => continue,
-                            _ => return Err(ServerError::Bitcoind(err)),
-                        },
+        // We always keep minimum 6 blocks, so unwrap is safe
+        let last = state.blocks_last().unwrap();
+        let header = rpc
+            .getblockheader(&last.hash)
+            .await
+            .map_err(ServerError::Bitcoind)?;
+
+        if let Some(header) = header {
+            // Try fet next header
+            if let Some(hash) = header.nextblockhash {
+                let header = rpc
+                    .getblockheader(&hash)
+                    .await
+                    .map_err(ServerError::Bitcoind)?;
+
+                // All this wrong on edge cases
+                if let Some(header) = header {
+                    if let Ok(block) = state.blocks_push_back(Block::from(header)) {
+                        info!("Add block {}: {}", block.height, &block.hash);
+                        state.blocks_pop_first();
+                        continue;
                     }
                 }
             }
-            Err(err) => match err {
-                RPCClientError::ResponseResultNotFound(_) => {
-                    state.blocks.pop_back();
-                    continue;
-                }
-                _ => return Err(ServerError::Bitcoind(err)),
-            },
+        } else {
+            // Current header not found, drop it...
+            state.blocks_pop_last();
+            continue;
         }
 
         // 25ms between calls, but minimum 5ms
