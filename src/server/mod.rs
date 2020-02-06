@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fmt;
 use std::time::{Duration, SystemTime};
 
@@ -20,15 +19,7 @@ enum ServerError {
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
-            Self::Bitcoind(ref e) => e.fmt(f),
-        }
-    }
-}
-
-impl Error for ServerError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match *self {
-            Self::Bitcoind(ref e) => Some(e),
+            Self::Bitcoind(ref e) => write!(f, "bitcoind: {}", e),
         }
     }
 }
@@ -55,25 +46,27 @@ fn run(args: &ArgMatches) -> Result<(), ServerError> {
     let rpc = RPCClient::new(bitcoind_url).map_err(ServerError::Bitcoind)?;
 
     // run loop
-    // TODO: add Result as return type
     let loop_sync = run_loop_sync(state, rpc);
-    actix_rt::System::new("loop_sync").block_on(loop_sync);
+    actix_rt::System::new("loop_sync").block_on(loop_sync)?;
 
     Ok(())
 }
 
 // Bitcoind synchronize loop
-async fn run_loop_sync(mut state: AppState, rpc: RPCClient) {
+async fn run_loop_sync(mut state: AppState, rpc: RPCClient) -> Result<(), ServerError> {
     loop {
         while state.blocks.len() < 6 {
             let hash = if state.blocks.is_empty() {
-                rpc.getblockchaininfo().await.bestblockhash
+                rpc.getblockchaininfo()
+                    .await
+                    .map_err(ServerError::Bitcoind)?
+                    .bestblockhash
             } else {
                 state.blocks.front().unwrap().prevhash.clone()
             };
 
             match rpc.getblockheader(&hash).await {
-                Some(block) => {
+                Ok(block) => {
                     state.blocks.push_front(Block {
                         height: block.height,
                         hash: hash.clone(),
@@ -83,7 +76,10 @@ async fn run_loop_sync(mut state: AppState, rpc: RPCClient) {
                     });
                     info!("Add block {}: {}", block.height, block.hash);
                 }
-                None => state.blocks.clear(),
+                Err(err) => match err {
+                    RPCClientError::ResponseResultNotFound(_) => state.blocks.clear(),
+                    _ => return Err(ServerError::Bitcoind(err)),
+                },
             }
         }
 
@@ -91,10 +87,10 @@ async fn run_loop_sync(mut state: AppState, rpc: RPCClient) {
 
         let last = state.blocks.back().unwrap();
         match rpc.getblockheader(&last.hash).await {
-            Some(block) => {
+            Ok(block) => {
                 if let Some(hash) = block.nextblockhash {
                     match rpc.getblockheader(&hash).await {
-                        Some(block) => {
+                        Ok(block) => {
                             state.blocks.push_back(Block {
                                 height: block.height,
                                 hash: block.hash.clone(),
@@ -106,14 +102,20 @@ async fn run_loop_sync(mut state: AppState, rpc: RPCClient) {
                             info!("Add block {}: {}", block.height, block.hash);
                             continue;
                         }
-                        None => continue,
+                        Err(err) => match err {
+                            RPCClientError::ResponseResultNotFound(_) => continue,
+                            _ => return Err(ServerError::Bitcoind(err)),
+                        },
                     }
                 }
             }
-            None => {
-                state.blocks.pop_back();
-                continue;
-            }
+            Err(err) => match err {
+                RPCClientError::ResponseResultNotFound(_) => {
+                    state.blocks.pop_back();
+                    continue;
+                }
+                _ => return Err(ServerError::Bitcoind(err)),
+            },
         }
 
         // 25ms between calls, but minimum 5ms

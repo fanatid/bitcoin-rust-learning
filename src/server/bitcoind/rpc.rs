@@ -1,9 +1,7 @@
-use std::error::Error;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use awc::error::FreezeRequestError;
 use awc::{ClientBuilder, FrozenClientRequest};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -12,26 +10,35 @@ use url::Url;
 #[derive(Debug)]
 pub enum RPCClientError {
     InvalidUrl(url::ParseError),
-    InvalidUrlScheme(String),
-    InvalidUrlFreeze(FreezeRequestError),
+    InvalidUrlScheme(String, String),
+    InvalidUrlFreeze(awc::error::FreezeRequestError),
+    RequestSend(awc::error::SendRequestError),
+    ResponsePayload(awc::error::PayloadError),
+    ResponseParse(serde_json::Error),
+    ResponseInvalidNonce(String),
+    ResponseResultError(ResponseError),
+    ResponseResultNotFound(String),
 }
 
 impl fmt::Display for RPCClientError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use RPCClientError::*;
         match *self {
-            Self::InvalidUrl(ref e) => e.fmt(f),
-            Self::InvalidUrlScheme(ref s) => s.fmt(f),
-            Self::InvalidUrlFreeze(ref e) => e.fmt(f),
-        }
-    }
-}
-
-impl Error for RPCClientError {
-    fn source(&self) -> Option<&(dyn Error + 'static)> {
-        match *self {
-            Self::InvalidUrl(ref e) => Some(e),
-            Self::InvalidUrlScheme(_) => None,
-            Self::InvalidUrlFreeze(_) => None,
+            InvalidUrl(ref e) => e.fmt(f),
+            InvalidUrlScheme(ref scheme, ref url) => write!(
+                f,
+                r#"Invalid scheme in bitcoind URL: "{}" ({})"#,
+                scheme, url
+            ),
+            InvalidUrlFreeze(ref e) => e.fmt(f),
+            RequestSend(ref e) => e.fmt(f),
+            ResponsePayload(ref e) => e.fmt(f),
+            ResponseParse(ref e) => e.fmt(f),
+            ResponseInvalidNonce(ref method) => write!(f, r#"Invalid nonce for: "{}""#, method),
+            ResponseResultError(ref e) => e.fmt(f),
+            ResponseResultNotFound(ref method) => {
+                write!(f, r#"Not found result for: "{}""#, method)
+            }
         }
     }
 }
@@ -72,8 +79,10 @@ impl RPCClient {
         match parsed.scheme() {
             "http" | "https" => {}
             scheme => {
-                let msg = format!(r#"Invalid scheme in bitcoind URL: "{}" ({})"#, scheme, url);
-                return Err(RPCClientError::InvalidUrlScheme(msg));
+                return Err(RPCClientError::InvalidUrlScheme(
+                    scheme.to_owned(),
+                    url.to_owned(),
+                ))
             }
         }
 
@@ -88,11 +97,12 @@ impl RPCClient {
         Ok((parsed.into_string(), username, password))
     }
 
-    async fn request<T>(&self, body: serde_json::value::Value) -> Response<T>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let mut res = self.client.send_body(body).await.unwrap();
+    async fn request<T: serde::de::DeserializeOwned>(
+        &self,
+        body: serde_json::value::Value,
+    ) -> Result<Response<T>, RPCClientError> {
+        let res_fut = self.client.send_body(body);
+        let mut res = res_fut.await.map_err(RPCClientError::RequestSend)?;
 
         // We ignore status, because expect error information in the body
         // let status = res.status();
@@ -107,40 +117,47 @@ impl RPCClient {
         // Change response body limit to 256 MiB
         // This require store all response and parsed result, what is shitty
         // Should be serde_json::from_reader
-        let body = res.body().limit(256 * 1024 * 1024).await.unwrap();
-        serde_json::from_slice(&body).unwrap()
+        let body_fut = res.body().limit(256 * 1024 * 1024);
+        let body = body_fut.await.map_err(RPCClientError::ResponsePayload)?;
+        serde_json::from_slice(&body).map_err(RPCClientError::ResponseParse)
     }
 
-    async fn call<T>(&self, method: &str, params: Option<&[serde_json::Value]>) -> Response<T>
-    where
-        T: serde::de::DeserializeOwned,
-    {
-        let body = {
+    async fn call<T: serde::de::DeserializeOwned>(
+        &self,
+        method: &str,
+        params: Option<&[serde_json::Value]>,
+    ) -> Result<T, RPCClientError> {
+        let nonce = {
             let mut nonce = self.nonce.lock().unwrap();
             *nonce = nonce.wrapping_add(1);
-            json!(Request {
-                method,
-                params,
-                id: *nonce
-            })
+            *nonce
         };
+        let body = json!(Request {
+            method,
+            params,
+            id: nonce,
+        });
 
-        self.request::<T>(body).await
-    }
-
-    pub async fn getblockchaininfo(&self) -> ResponseBlockchainInfo {
-        let res = self.call("getblockchaininfo", None).await;
-        if let Some(err) = res.error {
-            panic!("{}", err);
+        let data = self.request::<T>(body).await?;
+        if data.id != nonce {
+            return Err(RPCClientError::ResponseInvalidNonce(method.to_owned()));
         }
-
-        res.result.unwrap()
+        if let Some(error) = data.error {
+            return Err(RPCClientError::ResponseResultError(error));
+        }
+        match data.result {
+            None => Err(RPCClientError::ResponseResultNotFound(method.to_owned())),
+            Some(result) => Ok(result),
+        }
     }
 
-    pub async fn getblockheader(&self, hash: &str) -> Option<ResponseBlockHeader> {
+    pub async fn getblockchaininfo(&self) -> Result<ResponseBlockchainInfo, RPCClientError> {
+        self.call("getblockchaininfo", None).await
+    }
+
+    pub async fn getblockheader(&self, hash: &str) -> Result<ResponseBlockHeader, RPCClientError> {
         let params = [hash.into(), true.into()];
-        let res = self.call("getblockheader", Some(&params)).await;
-        res.result
+        self.call("getblockheader", Some(&params)).await
     }
 }
 
@@ -153,9 +170,9 @@ pub struct Request<'a, 'b> {
 
 #[derive(Debug, Deserialize)]
 pub struct Response<T> {
-    pub result: Option<T>,
-    pub error: Option<ResponseError>,
     pub id: u64,
+    pub error: Option<ResponseError>,
+    pub result: Option<T>,
 }
 
 #[derive(Debug, Deserialize)]
