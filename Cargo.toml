@@ -12,6 +12,8 @@ actix-rt = "1.0.0"
 actix-web = "2.0.0"
 awc = "1.0.1"
 clap = {version = "2.33", features = ["yaml"]}
+derivative = "1.0.3"
+derive_more = "0.99.2"
 env_logger = "0.7.1"
 log = "0.4"
 serde = "1.0"

@@ -1,6 +1,8 @@
 mod client;
 mod server;
 
+mod logger;
+
 // Parse CLI arguments and run specified subcommand
 fn main() {
     let cli_yaml = clap::load_yaml!("./cli.yaml");

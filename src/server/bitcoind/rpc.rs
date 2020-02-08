@@ -1,229 +1,133 @@
-use std::fmt;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use awc::{ClientBuilder, FrozenClientRequest};
-use serde::{Deserialize, Serialize};
+use awc::{Client, ClientBuilder};
+use derivative::Derivative;
 use serde_json::json;
-use url::Url;
 
-#[derive(Debug)]
-pub enum RPCClientError {
-    InvalidUrl(url::ParseError),
-    InvalidUrlScheme(String, String),
-    InvalidUrlFreeze(awc::error::FreezeRequestError),
-    RequestSend(awc::error::SendRequestError),
-    ResponsePayload(awc::error::PayloadError),
-    ResponseParse(serde_json::Error),
-    ResponseInvalidNonce(String),
-    ResponseResultError(ResponseError),
-    ResponseResultNotFound(String),
-    ResponseResultMismatch,
-}
+use super::json::*;
+use super::BitcoindError;
 
-impl fmt::Display for RPCClientError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        use RPCClientError::*;
-        match *self {
-            InvalidUrl(ref e) => e.fmt(f),
-            InvalidUrlScheme(ref scheme, ref url) => write!(
-                f,
-                r#"Invalid scheme in bitcoind URL: "{}" ({})"#,
-                scheme, url
-            ),
-            InvalidUrlFreeze(ref e) => e.fmt(f),
-            RequestSend(ref e) => e.fmt(f),
-            ResponsePayload(ref e) => e.fmt(f),
-            ResponseParse(ref e) => e.fmt(f),
-            ResponseInvalidNonce(ref method) => write!(f, r#"Invalid nonce for: "{}""#, method),
-            ResponseResultError(ref e) => e.fmt(f),
-            ResponseResultNotFound(ref method) => {
-                write!(f, r#"Not found result for: "{}""#, method)
-            }
-            ResponseResultMismatch => write!(f, "todo"),
-        }
-    }
-}
-
+#[derive(Derivative)]
+#[derivative(Debug)]
 pub struct RPCClient {
-    client: FrozenClientRequest,
-    nonce: Arc<Mutex<u64>>,
+    #[derivative(Debug = "ignore")]
+    client: Client,
+    url: String,
+    req_id: u64,
 }
 
 impl RPCClient {
     // Construct new RPCClient for specified URL
-    pub fn new(url: &str) -> Result<RPCClient, RPCClientError> {
-        let (url, username, password) = RPCClient::parse_url(url)?;
-
+    pub fn new(url: &str, username: &str, password: Option<&str>) -> RPCClient {
         let mut client = ClientBuilder::new()
-            .timeout(Duration::from_secs(60))
+            .timeout(Duration::from_secs(30))
             .disable_redirects()
             .header("Content-Type", "application/json");
         if !username.is_empty() {
-            client = client.basic_auth(username, password.as_deref());
+            client = client.basic_auth(username, password);
         }
 
-        let frozen_client = client
-            .finish()
-            .post(url)
-            .freeze()
-            .map_err(RPCClientError::InvalidUrlFreeze)?;
-
-        Ok(RPCClient {
-            client: frozen_client,
-            nonce: Arc::new(Mutex::new(0)),
-        })
-    }
-
-    // Prase given URL with username/password
-    fn parse_url(url: &str) -> Result<(String, String, Option<String>), RPCClientError> {
-        let mut parsed = Url::parse(url).map_err(RPCClientError::InvalidUrl)?;
-        match parsed.scheme() {
-            "http" | "https" => {}
-            scheme => {
-                return Err(RPCClientError::InvalidUrlScheme(
-                    scheme.to_owned(),
-                    url.to_owned(),
-                ))
-            }
+        RPCClient {
+            client: client.finish(),
+            url: url.to_owned(),
+            req_id: 0,
         }
-
-        let username = parsed.username().to_owned();
-        let password = parsed.password().map(|s| s.to_owned());
-
-        // Return Err only if `.cannot_be_a_base` is true
-        // Since we already verified that scheme is http/https, unwrap is safe
-        parsed.set_username("").unwrap();
-        parsed.set_password(None).unwrap();
-
-        Ok((parsed.into_string(), username, password))
     }
 
     async fn request<T: serde::de::DeserializeOwned>(
         &self,
         body: serde_json::value::Value,
-    ) -> Result<Response<T>, RPCClientError> {
-        let res_fut = self.client.send_body(body);
-        let mut res = res_fut.await.map_err(RPCClientError::RequestSend)?;
+    ) -> Result<Response<T>, BitcoindError> {
+        let res_fut = self.client.post(&self.url).send_body(body);
+        let mut res = res_fut.await.map_err(BitcoindError::SendRequest)?;
 
         // We ignore status, because expect error information in the body
         // let status = res.status();
-        // if status.as_u16() != 200 {
-        //     let message = match status.canonical_reason() {
-        //         Some(reason) => format!(" ({})", reason),
-        //         None => "".to_owned(),
-        //     };
-        //     panic!("Bitcoind RPC Client, Status code: {}{} is not OK", status.as_u16(), message);
-        // }
 
-        // Change response body limit to 256 MiB
+        // Change response body limit to 10 MiB
         // This require store all response and parsed result, what is shitty
         // Should be serde_json::from_reader
-        let body_fut = res.body().limit(256 * 1024 * 1024);
-        let body = body_fut.await.map_err(RPCClientError::ResponsePayload)?;
-        serde_json::from_slice(&body).map_err(RPCClientError::ResponseParse)
+        let body_fut = res.body().limit(10 * 1024 * 1024);
+        let body = body_fut.await.map_err(BitcoindError::ResponsePayload)?;
+        serde_json::from_slice(&body).map_err(BitcoindError::ResponseParse)
     }
 
     async fn call<T: serde::de::DeserializeOwned>(
-        &self,
+        &mut self,
         method: &str,
         params: Option<&[serde_json::Value]>,
-    ) -> Result<T, RPCClientError> {
-        let nonce = {
-            let mut nonce = self.nonce.lock().unwrap();
-            *nonce = nonce.wrapping_add(1);
-            *nonce
-        };
+    ) -> Result<T, BitcoindError> {
+        let req_id = self.req_id;
+        self.req_id = self.req_id.wrapping_add(1);
+
         let body = json!(Request {
             method,
             params,
-            id: nonce,
+            id: req_id,
         });
 
         let data = self.request::<T>(body).await?;
-        if data.id != nonce {
-            return Err(RPCClientError::ResponseInvalidNonce(method.to_owned()));
+        if data.id != req_id {
+            return Err(BitcoindError::NonceMismatch);
         }
         if let Some(error) = data.error {
-            return Err(RPCClientError::ResponseResultError(error));
+            return Err(BitcoindError::ResultRPC(error));
         }
         match data.result {
-            None => Err(RPCClientError::ResponseResultNotFound(method.to_owned())),
+            None => Err(BitcoindError::ResultNotFound),
             Some(result) => Ok(result),
         }
     }
 
-    pub async fn getblockchaininfo(&self) -> Result<ResponseBlockchainInfo, RPCClientError> {
+    pub async fn getblockchaininfo(&mut self) -> Result<ResponseBlockchainInfo, BitcoindError> {
         self.call("getblockchaininfo", None).await
     }
 
-    pub async fn getblockheader(
-        &self,
-        hash: &str,
-    ) -> Result<Option<ResponseBlockHeader>, RPCClientError> {
-        let params = [hash.into(), true.into()];
-        match self
-            .call::<ResponseBlockHeader>("getblockheader", Some(&params))
-            .await
-        {
-            // Add genereic checks?
-            Ok(data) => {
-                if data.hash == hash {
-                    Ok(Some(data))
-                } else {
-                    Err(RPCClientError::ResponseResultMismatch)
-                }
-            }
-            Err(RPCClientError::ResponseResultError(error)) => {
-                if error.code == -5 {
+    pub async fn getblockhash(&mut self, height: u32) -> Result<Option<String>, BitcoindError> {
+        let params = [height.into()];
+        match self.call::<String>("getblockhash", Some(&params)).await {
+            Ok(hash) => Ok(Some(hash)),
+            Err(BitcoindError::ResultRPC(error)) => {
+                // Block height out of range
+                if error.code == -8 {
                     Ok(None)
                 } else {
-                    Err(RPCClientError::ResponseResultError(error))
+                    Err(BitcoindError::ResultRPC(error))
                 }
             }
-            Err(err) => Err(err),
+            Err(error) => Err(error),
         }
     }
-}
 
-#[derive(Debug, Serialize)]
-pub struct Request<'a, 'b> {
-    pub method: &'a str,
-    pub params: Option<&'b [serde_json::Value]>,
-    pub id: u64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Response<T> {
-    pub id: u64,
-    pub error: Option<ResponseError>,
-    pub result: Option<T>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponseError {
-    pub code: i32,
-    pub message: String,
-    pub data: Option<serde_json::Value>,
-}
-
-impl fmt::Display for ResponseError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Bitcoind RPC error ({}): {}", self.code, self.message)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponseBlockchainInfo {
-    pub chain: String,
-    pub blocks: u32,
-    pub bestblockhash: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ResponseBlockHeader {
-    pub hash: String,
-    pub height: u32,
-    pub previousblockhash: Option<String>,
-    pub nextblockhash: Option<String>,
+    // pub async fn getblockheader(
+    //     &self,
+    //     hash: &str,
+    // ) -> Result<Option<ResponseBlockHeader>, BitcoindError> {
+    //     let params = [hash.into(), true.into()];
+    //     match self
+    //         .call::<ResponseBlockHeader>("getblockheader", Some(&params))
+    //         .await
+    //     {
+    //         // Add genereic checks?
+    //         Ok(data) => {
+    //             if data.hash == hash {
+    //                 Ok(Some(data))
+    //             } else {
+    //                 let msg = format!(
+    //                     r#"Hash mismatch, expected "{}", found: "{}""#,
+    //                     hash, data.hash
+    //                 );
+    //                 Err(BitcoindError::ResponseResultMismatch(msg))
+    //             }
+    //         }
+    //         Err(BitcoindError::ResponseResultError(error)) => {
+    //             if error.code == -5 {
+    //                 Ok(None)
+    //             } else {
+    //                 Err(BitcoindError::ResponseResultError(error))
+    //             }
+    //         }
+    //         Err(err) => Err(err),
+    //     }
+    // }
 }
