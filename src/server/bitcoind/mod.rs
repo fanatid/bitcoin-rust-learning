@@ -116,7 +116,6 @@ impl Bitcoind {
         }
     }
 
-    // TODO: use some &Number256 instead &str
     pub async fn getblockbyhash(&mut self, hash: &str) -> BitcoindResult<Option<ResponseBlock>> {
         self.rest.getblock(hash).await
     }
