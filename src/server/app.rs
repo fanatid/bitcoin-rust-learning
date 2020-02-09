@@ -28,7 +28,7 @@ impl App {
     }
 
     pub async fn run(mut app: App) -> Result<(), AppError> {
-        // TODO: app.bitcoind.init() -- validate bitcoind from rpc & rest
+        app.bitcoind.validate().await.map_err(AppError::Bitcoind)?;
         app.init_blocks().await?;
 
         loop {

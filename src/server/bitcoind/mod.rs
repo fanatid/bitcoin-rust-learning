@@ -1,3 +1,6 @@
+use std::time::{Duration, SystemTime};
+
+use log::info;
 use url::Url;
 
 pub use self::error::BitcoindError;
@@ -45,6 +48,51 @@ impl Bitcoind {
         parsed.set_password(None).unwrap();
 
         Ok((parsed.into_string(), username, password))
+    }
+
+    pub async fn validate(&mut self) -> BitcoindResult<()> {
+        self.validate_client_initialized().await?;
+        self.validate_clients_to_same_node().await
+    }
+
+    async fn validate_client_initialized(&mut self) -> BitcoindResult<()> {
+        let mut ts = SystemTime::now();
+        let mut last_message = "".to_owned();
+
+        loop {
+            match self.rpc.getblockchaininfo().await {
+                Ok(_) => return Ok(()),
+                Err(BitcoindError::ResultRPC(error)) => {
+                    // Client warming up error code is "-28"
+                    // https://github.com/bitcoin/bitcoin/pull/5007
+                    if error.code != -28 {
+                        return Err(BitcoindError::ResultRPC(error));
+                    }
+
+                    let elapsed = ts.elapsed().unwrap();
+                    if elapsed > Duration::from_secs(3) || last_message != error.message {
+                        ts = SystemTime::now();
+                        last_message = error.message;
+                        info!("Waiting coin client: {}", &last_message);
+                    }
+
+                    let sleep_duration = Duration::from_millis(10);
+                    actix_rt::time::delay_for(sleep_duration).await;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    async fn validate_clients_to_same_node(&mut self) -> BitcoindResult<()> {
+        let rpc_fut = self.rpc.getblockchaininfo();
+        let rest_fut = self.rest.getblockchaininfo();
+        let (rpc, rest) = tokio::try_join!(rpc_fut, rest_fut)?;
+        if rpc != rest {
+            Err(BitcoindError::ClientMismatch)
+        } else {
+            Ok(())
+        }
     }
 
     pub async fn getblockchaininfo(&mut self) -> BitcoindResult<ResponseBlockchainInfo> {

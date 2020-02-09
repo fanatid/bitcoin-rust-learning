@@ -28,4 +28,7 @@ pub enum BitcoindError {
 
     #[display(fmt = "Result object not match to requested")]
     ResultMismatch,
+
+    #[display(fmt = "Chain, height or best block hash did not match between clients")]
+    ClientMismatch,
 }

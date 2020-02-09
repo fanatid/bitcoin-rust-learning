@@ -32,23 +32,23 @@ impl RESTClient {
         }
     }
 
-    // pub async fn getblockchaininfo(&mut self) -> Result<ResponseBlockchainInfo, BitcoindError> {
-    //     self.url.set_path("rest/chaininfo.json");
-    //     let timeout = Duration::from_millis(500);
+    pub async fn getblockchaininfo(&mut self) -> Result<ResponseBlockchainInfo, BitcoindError> {
+        self.url.set_path("rest/chaininfo.json");
+        let timeout = Duration::from_millis(200);
 
-    //     let res_fut = self.client.get(self.url.as_ref()).timeout(timeout).send();
-    //     let mut res = res_fut.await.map_err(BitcoindError::SendRequest)?;
+        let res_fut = self.client.get(self.url.as_ref()).timeout(timeout).send();
+        let mut res = res_fut.await.map_err(BitcoindError::SendRequest)?;
 
-    //     let body = res.body().await.map_err(BitcoindError::ResponsePayload)?;
+        let body = res.body().await.map_err(BitcoindError::ResponsePayload)?;
 
-    //     match res.status().as_u16() {
-    //         200 => serde_json::from_slice(&body).map_err(BitcoindError::ResponseParse),
-    //         code => {
-    //             let msg = String::from_utf8_lossy(&body).trim().to_owned();
-    //             Err(BitcoindError::ResultRest(code, msg))
-    //         }
-    //     }
-    // }
+        match res.status().as_u16() {
+            200 => serde_json::from_slice(&body).map_err(BitcoindError::ResponseParse),
+            code => {
+                let msg = String::from_utf8_lossy(&body).trim().to_owned();
+                Err(BitcoindError::ResultRest(code, msg))
+            }
+        }
+    }
 
     pub async fn getblock(&mut self, hash: &str) -> Result<Option<ResponseBlock>, BitcoindError> {
         self.url.set_path(&format!("rest/block/{}.json", hash));

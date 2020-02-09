@@ -32,11 +32,10 @@ impl fmt::Display for ResponseError {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, PartialEq, Deserialize)]
 pub struct ResponseBlockchainInfo {
     pub chain: String,
     pub blocks: u32,
-    pub headers: u32,
     pub bestblockhash: String,
 }
 
