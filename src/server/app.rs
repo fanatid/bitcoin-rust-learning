@@ -53,6 +53,39 @@ impl App {
         // Ok(())
     }
 
+    // Add block to our chain
+    fn add_block(&mut self, block: Block, side: BlocksListSide) {
+        let block = match side {
+            BlocksListSide::Front => {
+                self.remove_blocks(BlocksListSide::Back);
+                self.blocks.push_front(block);
+                self.blocks.front().unwrap()
+            }
+            BlocksListSide::Back => {
+                self.remove_blocks(BlocksListSide::Front);
+                self.blocks.push_back(block);
+                self.blocks.back().unwrap()
+            }
+        };
+        info!("Add block {}: {}", block.height, &block.hash);
+    }
+
+    fn remove_blocks(&mut self, side: BlocksListSide) {
+        while self.blocks.len() >= APP_BLOCKS_MINIMUM {
+            let block = match side {
+                BlocksListSide::Front => self.blocks.pop_front().unwrap(),
+                BlocksListSide::Back => self.blocks.pop_back().unwrap(),
+            };
+            info!("Remove block {}: {}", block.height, &block.hash);
+        }
+    }
+
+    // Pop best block from our chain
+    async fn remove_best_block(&mut self) -> Result<(), AppError> {
+        self.blocks.pop_back();
+        self.init_blocks().await
+    }
+
     // Initialize our chain
     async fn init_blocks(&mut self) -> Result<(), AppError> {
         // Keep at least 6 blocks in chain
@@ -93,9 +126,7 @@ impl App {
             }
 
             // Add block
-            self.blocks.push_front(block);
-            let block = self.blocks.front().unwrap();
-            info!("Add block {}: {}", block.height, &block.hash);
+            self.add_block(block, BlocksListSide::Front);
         }
 
         Ok(())
@@ -117,8 +148,7 @@ impl App {
 
         // Remove blocks in our chain on reorg
         while last.height >= info.blocks {
-            self.blocks.pop_back();
-            self.init_blocks().await?;
+            self.remove_best_block().await?;
             last = self.blocks.back().unwrap();
         }
 
@@ -133,15 +163,11 @@ impl App {
             }
 
             // If previoush hash match to our best hash in new block, add it
+            // Otherwise remove our best block
             if block.prevhash.as_ref().unwrap() == &last.hash {
-                self.blocks.pop_front();
-                self.blocks.push_back(block);
-                let block = self.blocks.back().unwrap();
-                info!("Add block {}: {}", block.height, &block.hash);
+                self.add_block(block, BlocksListSide::Back);
             } else {
-                // If previous block hash did not match, remove best block
-                self.blocks.pop_back();
-                self.init_blocks().await?;
+                self.remove_best_block().await?;
             }
         }
 
@@ -165,6 +191,12 @@ impl From<ResponseBlock> for Block {
             prevhash: block.previousblockhash,
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+enum BlocksListSide {
+    Front,
+    Back,
 }
 
 #[derive(Debug, PartialEq)]
