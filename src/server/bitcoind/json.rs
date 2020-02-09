@@ -40,14 +40,6 @@ pub struct ResponseBlockchainInfo {
     pub bestblockhash: String,
 }
 
-// #[derive(Debug, Deserialize)]
-// pub struct ResponseBlockHeader {
-//     pub hash: String,
-//     pub height: u32,
-//     pub previousblockhash: Option<String>,
-//     pub nextblockhash: Option<String>,
-// }
-
 #[derive(Debug, Deserialize)]
 pub struct ResponseBlock {
     pub hash: String,

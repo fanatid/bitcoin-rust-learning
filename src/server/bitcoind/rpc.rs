@@ -98,36 +98,4 @@ impl RPCClient {
             Err(error) => Err(error),
         }
     }
-
-    // pub async fn getblockheader(
-    //     &self,
-    //     hash: &str,
-    // ) -> Result<Option<ResponseBlockHeader>, BitcoindError> {
-    //     let params = [hash.into(), true.into()];
-    //     match self
-    //         .call::<ResponseBlockHeader>("getblockheader", Some(&params))
-    //         .await
-    //     {
-    //         // Add genereic checks?
-    //         Ok(data) => {
-    //             if data.hash == hash {
-    //                 Ok(Some(data))
-    //             } else {
-    //                 let msg = format!(
-    //                     r#"Hash mismatch, expected "{}", found: "{}""#,
-    //                     hash, data.hash
-    //                 );
-    //                 Err(BitcoindError::ResponseResultMismatch(msg))
-    //             }
-    //         }
-    //         Err(BitcoindError::ResponseResultError(error)) => {
-    //             if error.code == -5 {
-    //                 Ok(None)
-    //             } else {
-    //                 Err(BitcoindError::ResponseResultError(error))
-    //             }
-    //         }
-    //         Err(err) => Err(err),
-    //     }
-    // }
 }
