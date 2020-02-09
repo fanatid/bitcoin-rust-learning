@@ -9,8 +9,8 @@ use super::error::AppError;
 use super::bitcoind::json::ResponseBlock;
 
 const APP_BLOCKS_MINIMUM: usize = 6;
-const UPDATE_DELAY_MAX: Duration = Duration::from_micros(25);
-const UPDATE_DELAY_MIN: Duration = Duration::from_micros(10);
+const UPDATE_DELAY_MAX: Duration = Duration::from_millis(25);
+const UPDATE_DELAY_MIN: Duration = Duration::from_millis(5);
 
 #[derive(Debug)]
 pub struct App {
@@ -36,12 +36,12 @@ impl App {
             let ts = SystemTime::now();
 
             // Update our chain
-            let require_delay = app.update_blocks().await?;
-            if !require_delay {
+            let blocks_modified = app.update_blocks().await?;
+            if blocks_modified == UpdateBlocksModified::Yes {
                 continue;
             }
 
-            // UPDATE_DELAY_MAX between calls, but minimum UPDATE_DELAY_MIN
+            // Some delay if blocks chain was not modified
             let elapsed = ts.elapsed().unwrap();
             let sleep_duration = match UPDATE_DELAY_MAX.checked_sub(elapsed) {
                 Some(delay) => std::cmp::max(delay, UPDATE_DELAY_MIN),
@@ -102,7 +102,7 @@ impl App {
     }
 
     // Update our chain, return `true` if need call update again
-    async fn update_blocks(&mut self) -> Result<bool, AppError> {
+    async fn update_blocks(&mut self) -> Result<UpdateBlocksModified, AppError> {
         // We always keep blocks, so unwrap is safe
         let mut last = self.blocks.back().unwrap();
 
@@ -112,7 +112,7 @@ impl App {
 
         // Best hash did not changed, return
         if info.bestblockhash == last.hash {
-            return Ok(false);
+            return Ok(UpdateBlocksModified::No);
         }
 
         // Remove blocks in our chain on reorg
@@ -124,33 +124,29 @@ impl App {
 
         // Add maximum 1 block
         let block_fut = self.bitcoind.getblockbyheight(last.height + 1);
-        match block_fut.await.map_err(AppError::Bitcoind)? {
-            Some(block) => {
-                let block = Block::from(block);
+        if let Some(block) = block_fut.await.map_err(AppError::Bitcoind)? {
+            let block = Block::from(block);
 
-                // If next block do not have previous blockhash, something wrong with blockchain
-                if block.prevhash.is_none() {
-                    return Err(AppError::InvalidBlockchain);
-                }
-
-                // If previoush hash match to our best hash in new block, add it
-                if block.prevhash.as_ref().unwrap() == &last.hash {
-                    self.blocks.pop_front();
-                    self.blocks.push_back(block);
-                    let block = self.blocks.back().unwrap();
-                    info!("Add block {}: {}", block.height, &block.hash);
-                } else {
-                    // If previous block hash did not match, remove best block
-                    self.blocks.pop_back();
-                    self.init_blocks().await?;
-                }
-
-                // Try update again in any case
-                Ok(true)
+            // If next block do not have previous blockhash, something wrong with blockchain
+            if block.prevhash.is_none() {
+                return Err(AppError::InvalidBlockchain);
             }
-            // Not found next block, but should exists on this step, return `true` for one more update
-            None => Ok(true),
+
+            // If previoush hash match to our best hash in new block, add it
+            if block.prevhash.as_ref().unwrap() == &last.hash {
+                self.blocks.pop_front();
+                self.blocks.push_back(block);
+                let block = self.blocks.back().unwrap();
+                info!("Add block {}: {}", block.height, &block.hash);
+            } else {
+                // If previous block hash did not match, remove best block
+                self.blocks.pop_back();
+                self.init_blocks().await?;
+            }
         }
+
+        // Will force call `update_blocks` again immediately
+        Ok(UpdateBlocksModified::Yes)
     }
 }
 
@@ -169,4 +165,10 @@ impl From<ResponseBlock> for Block {
             prevhash: block.previousblockhash,
         }
     }
+}
+
+#[derive(Debug, PartialEq)]
+enum UpdateBlocksModified {
+    Yes,
+    No,
 }
