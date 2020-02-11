@@ -1,5 +1,7 @@
+use std::io::Write;
 use std::time::{Duration, SystemTime};
 
+use base64::write::EncoderWriter as Base64Encoder;
 use log::info;
 use url::Url;
 
@@ -13,7 +15,7 @@ pub mod json;
 mod rest;
 mod rpc;
 
-type BitcoindResult<T> = Result<T, BitcoindError>;
+pub type BitcoindResult<T> = Result<T, BitcoindError>;
 
 #[derive(Debug)]
 pub struct Bitcoind {
@@ -23,31 +25,39 @@ pub struct Bitcoind {
 
 impl Bitcoind {
     pub fn new(url: &str) -> BitcoindResult<Bitcoind> {
-        let (url, username, password) = Self::parse_url(url)?;
+        let (url, auth) = Self::parse_url(url)?;
 
         Ok(Bitcoind {
-            rest: RESTClient::new(&url),
-            rpc: RPCClient::new(&url, &username, password.as_deref()),
+            rest: RESTClient::new(url.clone())?,
+            rpc: RPCClient::new(url, auth)?,
         })
     }
 
     // Prase given URL with username/password
-    fn parse_url(url: &str) -> BitcoindResult<(String, String, Option<String>)> {
+    fn parse_url(url: &str) -> BitcoindResult<(Url, Vec<u8>)> {
         let mut parsed = Url::parse(url).map_err(BitcoindError::InvalidUrl)?;
         match parsed.scheme() {
             "http" | "https" => {}
             scheme => return Err(BitcoindError::InvalidUrlScheme(scheme.to_owned())),
         }
 
-        let username = parsed.username().to_owned();
-        let password = parsed.password().map(|s| s.to_owned());
+        // https://docs.rs/reqwest/0.10.1/src/reqwest/async_impl/request.rs.html#183-199
+        let mut auth = b"Basic ".to_vec();
+        {
+            let mut encoder = Base64Encoder::new(&mut auth, base64::STANDARD);
+            // The unwraps here are fine because Vec::write* is infallible.
+            write!(encoder, "{}:", parsed.username()).unwrap();
+            if let Some(password) = parsed.password() {
+                write!(encoder, "{}", password).unwrap();
+            }
+        }
 
         // Return Err only if `.cannot_be_a_base` is true
         // Since we already verified that scheme is http/https, unwrap is safe
         parsed.set_username("").unwrap();
         parsed.set_password(None).unwrap();
 
-        Ok((parsed.into_string(), username, password))
+        Ok((parsed, auth))
     }
 
     pub async fn validate(&mut self) -> BitcoindResult<()> {
@@ -77,7 +87,7 @@ impl Bitcoind {
                     }
 
                     let sleep_duration = Duration::from_millis(10);
-                    actix_rt::time::delay_for(sleep_duration).await;
+                    tokio::time::delay_for(sleep_duration).await;
                 }
                 Err(e) => return Err(e),
             }

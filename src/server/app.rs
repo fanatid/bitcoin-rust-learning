@@ -47,7 +47,7 @@ impl App {
                 Some(delay) => std::cmp::max(delay, UPDATE_DELAY_MIN),
                 None => UPDATE_DELAY_MIN,
             };
-            actix_rt::time::delay_for(sleep_duration).await;
+            tokio::time::delay_for(sleep_duration).await;
         }
 
         // Ok(())

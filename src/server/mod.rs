@@ -1,5 +1,6 @@
 use clap::ArgMatches;
 use log::error;
+use tokio::runtime;
 
 use self::app::App;
 use self::bitcoind::Bitcoind;
@@ -32,7 +33,13 @@ fn run(args: &ArgMatches) -> Result<(), AppError> {
     let app = App::new(bitcoind);
 
     // run app
-    actix_rt::System::new("app_run").block_on(App::run(app))?;
+    runtime::Builder::new()
+        .basic_scheduler()
+        .enable_io()
+        .enable_time()
+        .build()
+        .expect("error on building runtime")
+        .block_on(App::run(app))?;
 
     // TODO: add ^C handler, in such case return Ok(())
     Ok(())

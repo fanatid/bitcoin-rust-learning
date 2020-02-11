@@ -8,9 +8,8 @@ pub enum BitcoindError {
     #[display(fmt = r#"URL scheme "{}" is not supported"#, _0)]
     InvalidUrlScheme(String),
 
-    SendRequest(awc::error::SendRequestError),
-
-    ResponsePayload(awc::error::PayloadError),
+    #[display(fmt = "{}", _0)]
+    Reqwest(reqwest::Error),
 
     #[display(fmt = "Invalid JSON response ({})", _0)]
     ResponseParse(serde_json::Error),
@@ -18,10 +17,10 @@ pub enum BitcoindError {
     #[display(fmt = "Nonce mismatch")]
     NonceMismatch,
 
-    ResultRPC(super::json::ResponseError),
-
     #[display(fmt = "Bitcoind REST error (code: {}): {}", _0, _1)]
     ResultRest(u16, String),
+
+    ResultRPC(super::json::ResponseError),
 
     #[display(fmt = "Requested object not found")]
     ResultNotFound,

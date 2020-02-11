@@ -1,54 +1,61 @@
 use std::time::Duration;
 
-use awc::{Client, ClientBuilder};
 use derivative::Derivative;
-use serde_json::json;
+use reqwest::{header, redirect, Client, ClientBuilder};
+use url::Url;
 
-use super::json::*;
-use super::BitcoindError;
+use super::{json::*, BitcoindError, BitcoindResult};
 
 #[derive(Derivative)]
 #[derivative(Debug)]
 pub struct RPCClient {
     #[derivative(Debug = "ignore")]
     client: Client,
-    url: String,
+    url: Url,
     req_id: u64,
 }
 
 impl RPCClient {
     // Construct new RPCClient for specified URL
-    pub fn new(url: &str, username: &str, password: Option<&str>) -> RPCClient {
-        let mut client = ClientBuilder::new()
-            .timeout(Duration::from_secs(30))
-            .disable_redirects()
-            .header("Content-Type", "application/json");
-        if !username.is_empty() {
-            client = client.basic_auth(username, password);
-        }
+    pub fn new(url: Url, auth: Vec<u8>) -> BitcoindResult<RPCClient> {
+        let mut headers = header::HeaderMap::with_capacity(2);
+        headers.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_bytes(&auth)
+                .expect("Not possible build auth from provided username/password"),
+        );
+        headers.insert(
+            header::CONTENT_TYPE,
+            header::HeaderValue::from_static("applicaiton/json"),
+        );
 
-        RPCClient {
-            client: client.finish(),
-            url: url.to_owned(),
+        let client = ClientBuilder::new()
+            .connect_timeout(Duration::from_millis(100))
+            .timeout(Duration::from_secs(30))
+            .default_headers(headers)
+            .no_gzip()
+            .redirect(redirect::Policy::none());
+
+        Ok(RPCClient {
+            client: client.build().map_err(BitcoindError::Reqwest)?,
+            url,
             req_id: 0,
-        }
+        })
     }
 
     async fn request<T: serde::de::DeserializeOwned>(
         &self,
-        body: serde_json::value::Value,
-    ) -> Result<Response<T>, BitcoindError> {
-        let res_fut = self.client.post(&self.url).send_body(body);
-        let mut res = res_fut.await.map_err(BitcoindError::SendRequest)?;
+        body: Vec<u8>,
+    ) -> BitcoindResult<Response<T>> {
+        let res_fut = self.client.post(self.url.clone()).body(body).send();
+        let res = res_fut.await.map_err(BitcoindError::Reqwest)?;
 
         // We ignore status, because expect error information in the body
         // let status = res.status();
 
-        // Change response body limit to 10 MiB
-        // This require store all response and parsed result, what is shitty
         // Should be serde_json::from_reader
-        let body_fut = res.body().limit(10 * 1024 * 1024);
-        let body = body_fut.await.map_err(BitcoindError::ResponsePayload)?;
+        let body_fut = res.bytes();
+        let body = body_fut.await.map_err(BitcoindError::Reqwest)?;
         serde_json::from_slice(&body).map_err(BitcoindError::ResponseParse)
     }
 
@@ -56,15 +63,16 @@ impl RPCClient {
         &mut self,
         method: &str,
         params: Option<&[serde_json::Value]>,
-    ) -> Result<T, BitcoindError> {
+    ) -> BitcoindResult<T> {
         let req_id = self.req_id;
         self.req_id = self.req_id.wrapping_add(1);
 
-        let body = json!(Request {
+        let body = serde_json::to_vec(&Request {
             method,
             params,
             id: req_id,
-        });
+        })
+        .expect("Invalid data for building JSON");
 
         let data = self.request::<T>(body).await?;
         if data.id != req_id {
@@ -79,11 +87,11 @@ impl RPCClient {
         }
     }
 
-    pub async fn getblockchaininfo(&mut self) -> Result<ResponseBlockchainInfo, BitcoindError> {
+    pub async fn getblockchaininfo(&mut self) -> BitcoindResult<ResponseBlockchainInfo> {
         self.call("getblockchaininfo", None).await
     }
 
-    pub async fn getblockhash(&mut self, height: u32) -> Result<Option<String>, BitcoindError> {
+    pub async fn getblockhash(&mut self, height: u32) -> BitcoindResult<Option<String>> {
         let params = [height.into()];
         match self.call::<String>("getblockhash", Some(&params)).await {
             Ok(hash) => Ok(Some(hash)),
