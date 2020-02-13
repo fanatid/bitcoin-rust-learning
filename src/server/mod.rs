@@ -1,11 +1,13 @@
 use clap::ArgMatches;
-use log::error;
-use tokio::runtime;
+use futures::stream::StreamExt;
+use log::{error, info};
+use tokio::sync::oneshot;
 
 use self::app::App;
 use self::bitcoind::Bitcoind;
 use self::error::AppError;
-use super::logger;
+use crate::logger;
+use crate::signals::Signals;
 
 mod app;
 mod bitcoind;
@@ -28,19 +30,33 @@ fn run(args: &ArgMatches) -> Result<(), AppError> {
     // unwrap values from args, because existence should be validated by clap
     let bitcoind_url = args.value_of("bitcoind").unwrap();
 
-    // create required structs
+    // Create required structs
     let bitcoind = Bitcoind::new(bitcoind_url).map_err(AppError::Bitcoind)?;
-    let app = App::new(bitcoind);
+    let mut app = App::new(bitcoind);
 
-    // run app
-    runtime::Builder::new()
+    // Create runtime and run app
+    tokio::runtime::Builder::new()
         .basic_scheduler()
         .enable_io()
         .enable_time()
         .build()
         .expect("error on building runtime")
-        .block_on(App::run(app))?;
+        .block_on(async {
+            let (tx, rx) = oneshot::channel();
+            tokio::spawn(async move {
+                let mut s = Signals::new();
 
-    // TODO: add ^C handler, in such case return Ok(())
-    Ok(())
+                if let Some(sig) = s.next().await {
+                    info!("{:?} received, shutting down...", sig);
+                    tx.send(()).unwrap();
+                }
+
+                if let Some(sig) = s.next().await {
+                    info!("{:?} received, exit now...", sig);
+                    std::process::exit(2);
+                }
+            });
+
+            app.run(rx).await
+        })
 }

@@ -2,6 +2,7 @@ mod client;
 mod server;
 
 mod logger;
+mod signals;
 
 // Parse CLI arguments and run specified subcommand
 fn main() {

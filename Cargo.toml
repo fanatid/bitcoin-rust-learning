@@ -13,11 +13,12 @@ clap = {version = "2.33", features = ["yaml"]}
 derivative = "1.0.3"
 derive_more = "0.99.2"
 env_logger = "0.7.1"
+futures = "0.3.4"
 log = "0.4"
 reqwest = "0.10.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "0.2.11", features = ["rt-core", "io-driver", "io-util", "tcp", "time", "time", "macros"] }
+tokio = { version = "0.2.11", features = ["rt-core", "io-driver", "io-util", "tcp", "time", "time", "macros", "signal"] }
 url = "2.1.1"
 
 [build-dependencies]

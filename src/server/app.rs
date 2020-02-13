@@ -2,11 +2,10 @@ use std::collections::LinkedList;
 use std::time::{Duration, SystemTime};
 
 use log::info;
+use tokio::sync::oneshot::{self, error::TryRecvError};
 
-use super::bitcoind::Bitcoind;
+use super::bitcoind::{json::ResponseBlock, Bitcoind};
 use super::error::AppError;
-
-use super::bitcoind::json::ResponseBlock;
 
 const APP_BLOCKS_MINIMUM: usize = 6;
 const UPDATE_DELAY_MAX: Duration = Duration::from_millis(25);
@@ -15,7 +14,6 @@ const UPDATE_DELAY_MIN: Duration = Duration::from_millis(5);
 #[derive(Debug)]
 pub struct App {
     bitcoind: Bitcoind,
-
     blocks: LinkedList<Block>,
 }
 
@@ -27,16 +25,22 @@ impl App {
         }
     }
 
-    pub async fn run(mut app: App) -> Result<(), AppError> {
-        app.bitcoind.validate().await.map_err(AppError::Bitcoind)?;
-        app.init_blocks().await?;
+    pub async fn run(&mut self, mut shutdown: oneshot::Receiver<()>) -> Result<(), AppError> {
+        self.bitcoind.validate().await.map_err(AppError::Bitcoind)?;
+        self.init_blocks().await?;
 
         loop {
+            match shutdown.try_recv() {
+                Ok(_) => break,
+                Err(TryRecvError::Empty) => {}
+                Err(TryRecvError::Closed) => panic!("shutdown oneshot channel closed"),
+            }
+
             // Save current timestamp for timeout after check
             let ts = SystemTime::now();
 
             // Update our chain
-            let blocks_modified = app.update_blocks().await?;
+            let blocks_modified = self.update_blocks().await?;
             if blocks_modified == UpdateBlocksModified::Yes {
                 continue;
             }
@@ -47,10 +51,15 @@ impl App {
                 Some(delay) => std::cmp::max(delay, UPDATE_DELAY_MIN),
                 None => UPDATE_DELAY_MIN,
             };
-            tokio::time::delay_for(sleep_duration).await;
+
+            // Exit earlier if shutdown signal received
+            tokio::select! {
+                _ = tokio::time::delay_for(sleep_duration) => {},
+                _ = &mut shutdown => break,
+            }
         }
 
-        // Ok(())
+        Ok(())
     }
 
     // Add block to our chain
