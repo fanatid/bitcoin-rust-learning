@@ -1,5 +1,5 @@
 use clap::ArgMatches;
-use futures::stream::StreamExt;
+use futures::stream::StreamExt as _;
 use log::{error, info};
 use tokio::sync::oneshot;
 
@@ -43,7 +43,7 @@ fn run(args: &ArgMatches) -> Result<(), AppError> {
         .expect("error on building runtime")
         .block_on(async {
             let (tx, rx) = oneshot::channel();
-            tokio::spawn(async move {
+            tokio::spawn(async {
                 let mut s = Signals::new();
 
                 if let Some(sig) = s.next().await {

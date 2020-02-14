@@ -30,6 +30,7 @@ impl App {
         self.init_blocks().await?;
 
         loop {
+            // Should we stop loop check
             match shutdown.try_recv() {
                 Ok(_) => break,
                 Err(TryRecvError::Empty) => {}
