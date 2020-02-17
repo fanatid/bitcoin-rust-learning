@@ -2,20 +2,25 @@
 // not all coin clients fixed it.
 // See issue in bitcoin repo: https://github.com/bitcoin/bitcoin/issues/15925
 
+use std::fmt;
 use std::time::Duration;
 
-use derivative::Derivative;
 use reqwest::{header, redirect, Client, ClientBuilder};
 use url::Url;
 
 use super::{json::*, BitcoindError, BitcoindResult};
 
-#[derive(Derivative)]
-#[derivative(Debug)]
 pub struct RESTClient {
-    #[derivative(Debug = "ignore")]
     client: Client,
     url: Url,
+}
+
+impl fmt::Debug for RESTClient {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("RESTClient")
+            .field("url", &self.url)
+            .finish()
+    }
 }
 
 impl RESTClient {

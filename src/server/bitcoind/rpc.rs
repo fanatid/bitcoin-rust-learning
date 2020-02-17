@@ -1,18 +1,24 @@
+use std::fmt;
 use std::time::Duration;
 
-use derivative::Derivative;
 use reqwest::{header, redirect, Client, ClientBuilder};
 use url::Url;
 
 use super::{json::*, BitcoindError, BitcoindResult};
 
-#[derive(Derivative)]
-#[derivative(Debug)]
 pub struct RPCClient {
-    #[derivative(Debug = "ignore")]
     client: Client,
     url: Url,
     req_id: u64,
+}
+
+impl fmt::Debug for RPCClient {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_struct("RPCClient")
+            .field("url", &self.url)
+            .field("req_id", &self.req_id)
+            .finish()
+    }
 }
 
 impl RPCClient {
