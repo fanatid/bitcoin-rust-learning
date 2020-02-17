@@ -2,31 +2,30 @@ use std::collections::LinkedList;
 use std::time::{Duration, SystemTime};
 
 use log::info;
-use tokio::sync::oneshot::{self, error::TryRecvError};
+use tokio::sync::broadcast::{Receiver, TryRecvError};
 
 use super::bitcoind::{json::ResponseBlock, Bitcoind};
-use super::error::AppError;
+use super::error::{AppError, AppResult};
 
 const APP_BLOCKS_MINIMUM: usize = 6;
 const UPDATE_DELAY_MAX: Duration = Duration::from_millis(25);
 const UPDATE_DELAY_MIN: Duration = Duration::from_millis(5);
 
 #[derive(Debug)]
-pub struct App {
+pub struct State {
     bitcoind: Bitcoind,
     blocks: LinkedList<Block>,
 }
 
-impl App {
-    pub fn new(bitcoind: Bitcoind) -> App {
-        App {
+impl State {
+    pub fn new(bitcoind: Bitcoind) -> State {
+        State {
             bitcoind,
             blocks: LinkedList::new(),
         }
     }
 
-    pub async fn run(&mut self, mut shutdown: oneshot::Receiver<()>) -> Result<(), AppError> {
-        self.bitcoind.validate().await.map_err(AppError::Bitcoind)?;
+    pub async fn run_update_loop(&mut self, mut shutdown: Receiver<()>) -> AppResult<()> {
         self.init_blocks().await?;
 
         loop {
@@ -34,7 +33,7 @@ impl App {
             match shutdown.try_recv() {
                 Ok(_) => break,
                 Err(TryRecvError::Empty) => {}
-                Err(TryRecvError::Closed) => panic!("shutdown oneshot channel closed"),
+                Err(err) => panic!("shutdown channel error: {:?}", err),
             }
 
             // Save current timestamp for timeout after check
@@ -56,7 +55,12 @@ impl App {
             // Exit earlier if shutdown signal received
             tokio::select! {
                 _ = tokio::time::delay_for(sleep_duration) => {},
-                _ = &mut shutdown => break,
+                sig = shutdown.recv() => {
+                    match sig {
+                        Ok(_) => break,
+                        Err(err) => panic!("shutdown channel error: {:?}", err),
+                    }
+                },
             }
         }
 
@@ -91,13 +95,13 @@ impl App {
     }
 
     // Pop best block from our chain
-    async fn remove_best_block(&mut self) -> Result<(), AppError> {
+    async fn remove_best_block(&mut self) -> AppResult<()> {
         self.blocks.pop_back();
         self.init_blocks().await
     }
 
     // Initialize our chain
-    async fn init_blocks(&mut self) -> Result<(), AppError> {
+    async fn init_blocks(&mut self) -> AppResult<()> {
         // Keep at least 6 blocks in chain
         while self.blocks.len() < APP_BLOCKS_MINIMUM {
             // Get prevhash from first known block or just get tip
@@ -143,7 +147,7 @@ impl App {
     }
 
     // Update our chain, return `true` if need call update again
-    async fn update_blocks(&mut self) -> Result<UpdateBlocksModified, AppError> {
+    async fn update_blocks(&mut self) -> AppResult<UpdateBlocksModified> {
         // We always keep blocks, so unwrap is safe
         let mut last = self.blocks.back().unwrap();
 

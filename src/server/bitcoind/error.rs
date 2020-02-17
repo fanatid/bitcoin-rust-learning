@@ -31,3 +31,5 @@ pub enum BitcoindError {
     #[display(fmt = "Chain, height or best block hash did not match between clients")]
     ClientMismatch,
 }
+
+pub type BitcoindResult<T> = Result<T, BitcoindError>;

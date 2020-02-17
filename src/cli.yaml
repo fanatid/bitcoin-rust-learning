@@ -27,3 +27,10 @@ subcommands:
             takes_value: true
             env: BITCOIND
             default_value: http://bitcoinrpc:password@localhost:8332/
+        - listen:
+            help: Listen host:port for HTTP and WebSocket requests
+            required: true
+            long: listen
+            takes_value: true
+            env: LISTEN
+            default_value: localhost:8000

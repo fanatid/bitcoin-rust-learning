@@ -5,7 +5,7 @@ use base64::write::EncoderWriter as Base64Encoder;
 use log::info;
 use url::Url;
 
-pub use self::error::BitcoindError;
+pub use self::error::{BitcoindError, BitcoindResult};
 use self::json::*;
 use self::rest::RESTClient;
 use self::rpc::RPCClient;
@@ -14,8 +14,6 @@ mod error;
 pub mod json;
 mod rest;
 mod rpc;
-
-pub type BitcoindResult<T> = Result<T, BitcoindError>;
 
 #[derive(Debug)]
 pub struct Bitcoind {

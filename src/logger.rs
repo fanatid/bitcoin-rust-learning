@@ -1,7 +1,7 @@
 use std::io::{self, Write};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use env_logger::{Builder, Env, Target, fmt};
+use env_logger::{fmt, Builder, Env, Target};
 use log::{Level, Record};
 use serde_json::json;
 
