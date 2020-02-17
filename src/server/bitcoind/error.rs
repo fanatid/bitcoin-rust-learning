@@ -1,35 +1,43 @@
-use derive_more::Display;
+use reqwest::Error as ReqwestError;
+use serde_json::Error as SerdeError;
+use url::ParseError as UrlParseError;
 
-#[derive(Debug, Display)]
-pub enum BitcoindError {
-    #[display(fmt = "Invalid URL ({})", _0)]
-    InvalidUrl(url::ParseError),
+use super::json::ResponseError;
 
-    #[display(fmt = r#"URL scheme "{}" is not supported"#, _0)]
-    InvalidUrlScheme(String),
-
-    #[display(fmt = "{}", _0)]
-    Reqwest(reqwest::Error),
-
-    #[display(fmt = "Invalid JSON response ({})", _0)]
-    ResponseParse(serde_json::Error),
-
-    #[display(fmt = "Nonce mismatch")]
-    NonceMismatch,
-
-    #[display(fmt = "Bitcoind REST error (code: {}): {}", _0, _1)]
-    ResultRest(u16, String),
-
-    ResultRPC(super::json::ResponseError),
-
-    #[display(fmt = "Requested object not found")]
-    ResultNotFound,
-
-    #[display(fmt = "Result object not match to requested")]
-    ResultMismatch,
-
-    #[display(fmt = "Chain, height or best block hash did not match between clients")]
-    ClientMismatch,
+quick_error! {
+    #[derive(Debug)]
+    pub enum BitcoindError {
+        InvalidUrl(err: UrlParseError) {
+            display("Invalid URL ({})", err)
+        }
+        InvalidUrlScheme(scheme: String) {
+            display(r#"URL scheme "{}" is not supported"#, scheme)
+        }
+        Reqwest(err: ReqwestError) {
+            display("{}", err)
+        }
+        ResponseParse(err: SerdeError) {
+            display("Invalid JSON response ({})", err)
+        }
+        NonceMismatch {
+            display("Nonce mismatch")
+        }
+        ResultRest(code: u16, msg: String) {
+            display("Bitcoind REST error (code: {}): {}", code, msg)
+        }
+        ResultRPC(err: ResponseError) {
+            display("{}", err)
+        }
+        ResultNotFound {
+            display("Requested object not found")
+        }
+        ResultMismatch {
+            display("Result object not match to requested")
+        }
+        ClientMismatch {
+            display("Chain, height or best block hash did not match between clients")
+        }
+    }
 }
 
 pub type BitcoindResult<T> = Result<T, BitcoindError>;

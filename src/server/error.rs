@@ -1,24 +1,32 @@
-use derive_more::Display;
+use std::io::Error as IOError;
+use std::net::SocketAddr;
 
-#[derive(Debug, Display)]
-pub enum AppError {
-    #[display(fmt = "bitcoind: {}", _0)]
-    Bitcoind(super::bitcoind::BitcoindError),
+use hyper::error::Error as HyperError;
 
-    #[display(fmt = "Listen host:port parse error: {}", _0)]
-    ListenHostPortParse(std::io::Error),
+use super::bitcoind::BitcoindError;
 
-    #[display(fmt = r#"Nothing to listen, please check "--listen" argument"#)]
-    ListenHostPortNotFound,
-
-    #[display(fmt = "Address ({}) bind error: {}", _0, _1)]
-    HyperBind(std::net::SocketAddr, hyper::error::Error),
-
-    #[display(fmt = "Not enough blocks for app")]
-    NotEnoughBlocks,
-
-    #[display(fmt = "Invalid blockchain")]
-    InvalidBlockchain,
+quick_error! {
+    #[derive(Debug)]
+    pub enum AppError {
+        Bitcoind(err: BitcoindError) {
+            display("bitcoind: {}", err)
+        }
+        ListenHostPortParse(err: IOError) {
+            display("Listen host:port parse error: {}", err)
+        }
+        ListenHostPortNotFound {
+            display(r#"Nothing to listen, please check "--listen" argument"#)
+        }
+        HyperBind(addr: SocketAddr, err: HyperError) {
+            display("Address ({}) bind error: {}", addr, err)
+        }
+        NotEnoughBlocks {
+            display("Not enough blocks for app")
+        }
+        InvalidBlockchain {
+            display("Invalid blockchain")
+        }
+    }
 }
 
 pub type AppResult<T> = Result<T, AppError>;

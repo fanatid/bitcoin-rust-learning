@@ -60,11 +60,11 @@ dependencies = [
  "base64",
  "clap",
  "derivative",
- "derive_more",
  "env_logger",
  "futures",
  "hyper",
  "log",
+ "quick-error",
  "reqwest",
  "serde",
  "serde_json",
@@ -153,17 +153,6 @@ dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
  "syn 0.15.44",
-]
-
-[[package]]
-name = "derive_more"
-version = "0.99.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2159be042979966de68315bce7034bb000c775f22e3e834e1c52ff78f041cae8"
-dependencies = [
- "proc-macro2 1.0.8",
- "quote 1.0.2",
- "syn 1.0.14",
 ]
 
 [[package]]
