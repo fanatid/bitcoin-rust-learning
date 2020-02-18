@@ -26,7 +26,7 @@ impl State {
     }
 
     pub async fn run_update_loop(&mut self, mut shutdown: ShutdownReceiver) -> AppResult<()> {
-        self.init_blocks().await?;
+        self.init_blocks(Some(&mut shutdown)).await?;
 
         loop {
             // Should we stop loop check
@@ -90,13 +90,18 @@ impl State {
     // Pop best block from our chain
     async fn remove_best_block(&mut self) -> AppResult<()> {
         self.blocks.pop_back();
-        self.init_blocks().await
+        self.init_blocks(None).await
     }
 
     // Initialize our chain
-    async fn init_blocks(&mut self) -> AppResult<()> {
+    async fn init_blocks(&mut self, mut shutdown: Option<&mut ShutdownReceiver>) -> AppResult<()> {
         // Keep at least 6 blocks in chain
         while self.blocks.len() < APP_BLOCKS_MINIMUM {
+            // Out from loop if we received shutdown signal
+            if shutdown.is_some() && shutdown.as_mut().unwrap().is_recv() {
+                break;
+            }
+
             // Get prevhash from first known block or just get tip
             let hash = if let Some(block) = self.blocks.front() {
                 match block.prevhash {
