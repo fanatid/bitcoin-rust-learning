@@ -2,10 +2,10 @@ use std::collections::LinkedList;
 use std::time::{Duration, SystemTime};
 
 use log::info;
-use tokio::sync::broadcast::{Receiver, TryRecvError};
 
 use super::bitcoind::{json::ResponseBlock, Bitcoind};
 use super::error::{AppError, AppResult};
+use crate::signals::ShutdownReceiver;
 
 const APP_BLOCKS_MINIMUM: usize = 6;
 const UPDATE_DELAY_MAX: Duration = Duration::from_millis(25);
@@ -25,15 +25,13 @@ impl State {
         }
     }
 
-    pub async fn run_update_loop(&mut self, mut shutdown: Receiver<()>) -> AppResult<()> {
+    pub async fn run_update_loop(&mut self, mut shutdown: ShutdownReceiver) -> AppResult<()> {
         self.init_blocks().await?;
 
         loop {
             // Should we stop loop check
-            match shutdown.try_recv() {
-                Ok(_) => break,
-                Err(TryRecvError::Empty) => {}
-                Err(err) => panic!("shutdown channel error: {:?}", err),
+            if shutdown.is_recv() {
+                break;
             }
 
             // Save current timestamp for timeout after check
@@ -55,12 +53,7 @@ impl State {
             // Exit earlier if shutdown signal received
             tokio::select! {
                 _ = tokio::time::delay_for(sleep_duration) => {},
-                sig = shutdown.recv() => {
-                    match sig {
-                        Ok(_) => break,
-                        Err(err) => panic!("shutdown channel error: {:?}", err),
-                    }
-                },
+                _ = shutdown.recv() => { break },
             }
         }
 

@@ -4,13 +4,13 @@ use std::net::SocketAddr;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
 use log::info;
-use tokio::sync::broadcast::Receiver;
 
 use super::error::{AppError, AppResult};
+use crate::signals::ShutdownReceiver;
 
 type ReqResult = Result<Response<Body>, Infallible>;
 
-pub fn run_server(addr: SocketAddr, mut shutdown: Receiver<()>) -> AppResult<()> {
+pub fn run_server(addr: SocketAddr, mut shutdown: ShutdownReceiver) -> AppResult<()> {
     let make_svc = make_service_fn(|_| async {
         let svc_fn = move |req| handle_request(req);
 
@@ -26,10 +26,9 @@ pub fn run_server(addr: SocketAddr, mut shutdown: Receiver<()>) -> AppResult<()>
     let local_addr = server.local_addr();
     info!("Start API server at {}", local_addr);
 
-    tokio::spawn(server.with_graceful_shutdown(async move {
-        let msg = shutdown.recv().await;
-        msg.expect("Shutdown signal broken for API server")
-    }));
+    // TODO: Check hyper::Server, becuase I do not understand:
+    // Why it's ok for `server`, but for `shutdown`: borrowed value does not live long enough
+    tokio::spawn(server.with_graceful_shutdown(async move { shutdown.recv().await }));
 
     Ok(())
 }
