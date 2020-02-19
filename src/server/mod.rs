@@ -51,7 +51,7 @@ async fn run<'a>(args: &ArgMatches<'a>) -> AppResult<()> {
     bitcoind.validate().await.map_err(AppError::Bitcoind)?;
 
     // Create state
-    let mut state = Arc::new(State::new(bitcoind));
+    let state = Arc::new(State::new(bitcoind));
 
     // Parse host:port
     let listen_arg = args.value_of("listen").unwrap();
@@ -67,9 +67,5 @@ async fn run<'a>(args: &ArgMatches<'a>) -> AppResult<()> {
     run_server(listen_addr, state.clone(), shutdown.clone())?;
 
     // Run watch loop and block runtime
-    unsafe {
-        Arc::get_mut_unchecked(&mut state)
-            .run_update_loop(shutdown.clone())
-            .await
-    }
+    state.run_update_loop(shutdown.clone()).await
 }

@@ -3,6 +3,7 @@ use std::error::Error as StdError;
 use std::time::{Duration, SystemTime};
 
 use log::info;
+use tokio::sync::RwLock;
 
 use super::bitcoind::{json::ResponseBlock, Bitcoind, BitcoindError};
 use super::error::{AppError, AppResult};
@@ -16,19 +17,22 @@ const UPDATE_DELAY_MIN: Duration = Duration::from_millis(5);
 #[derive(Debug)]
 pub struct State {
     bitcoind: Bitcoind,
-    blocks: LinkedList<StateBlock>,
+    blocks: RwLock<LinkedList<StateBlock>>,
 }
 
 impl State {
     pub fn new(bitcoind: Bitcoind) -> Self {
         State {
             bitcoind,
-            blocks: LinkedList::new(),
+            blocks: RwLock::new(LinkedList::new()),
         }
     }
 
-    pub async fn run_update_loop(&mut self, mut shutdown: ShutdownReceiver) -> AppResult<()> {
-        self.init_blocks(Some(&mut shutdown)).await?;
+    pub async fn run_update_loop(&self, mut shutdown: ShutdownReceiver) -> AppResult<()> {
+        {
+            let mut blocks = self.blocks.write().await;
+            self.init_blocks(&mut blocks, Some(&mut shutdown)).await?;
+        }
 
         loop {
             // Should we stop loop check
@@ -63,49 +67,58 @@ impl State {
     }
 
     // Add block to our chain
-    fn add_block(&mut self, block: StateBlock, side: BlocksListSide) {
+    fn add_block(
+        &self,
+        blocks: &mut LinkedList<StateBlock>,
+        block: StateBlock,
+        side: BlocksListSide,
+    ) {
         let block = match side {
             BlocksListSide::Front => {
-                self.remove_blocks(BlocksListSide::Back);
-                self.blocks.push_front(block);
-                self.blocks.front().unwrap()
+                self.remove_blocks(blocks, BlocksListSide::Back);
+                blocks.push_front(block);
+                blocks.front().unwrap()
             }
             BlocksListSide::Back => {
-                self.remove_blocks(BlocksListSide::Front);
-                self.blocks.push_back(block);
-                self.blocks.back().unwrap()
+                self.remove_blocks(blocks, BlocksListSide::Front);
+                blocks.push_back(block);
+                blocks.back().unwrap()
             }
         };
         info!("Add block {}: {}", block.height, &block.hash);
     }
 
-    fn remove_blocks(&mut self, side: BlocksListSide) {
-        while self.blocks.len() >= APP_BLOCKS_MINIMUM {
+    fn remove_blocks(&self, blocks: &mut LinkedList<StateBlock>, side: BlocksListSide) {
+        while blocks.len() >= APP_BLOCKS_MINIMUM {
             let block = match side {
-                BlocksListSide::Front => self.blocks.pop_front().unwrap(),
-                BlocksListSide::Back => self.blocks.pop_back().unwrap(),
+                BlocksListSide::Front => blocks.pop_front().unwrap(),
+                BlocksListSide::Back => blocks.pop_back().unwrap(),
             };
             info!("Remove block {}: {}", block.height, &block.hash);
         }
     }
 
     // Pop best block from our chain
-    async fn remove_best_block(&mut self) -> AppResult<()> {
-        self.blocks.pop_back();
-        self.init_blocks(None).await
+    async fn remove_best_block(&self, blocks: &mut LinkedList<StateBlock>) -> AppResult<()> {
+        blocks.pop_back();
+        self.init_blocks(blocks, None).await
     }
 
     // Initialize our chain
-    async fn init_blocks(&mut self, mut shutdown: Option<&mut ShutdownReceiver>) -> AppResult<()> {
+    async fn init_blocks(
+        &self,
+        blocks: &mut LinkedList<StateBlock>,
+        mut shutdown: Option<&mut ShutdownReceiver>,
+    ) -> AppResult<()> {
         // Keep at least 6 blocks in chain
-        while self.blocks.len() < APP_BLOCKS_MINIMUM {
+        while blocks.len() < APP_BLOCKS_MINIMUM {
             // Out from loop if we received shutdown signal
             if shutdown.is_some() && shutdown.as_mut().unwrap().is_recv() {
                 break;
             }
 
             // Get prevhash from first known block or just get tip
-            let hash = if let Some(block) = self.blocks.front() {
+            let hash = if let Some(block) = blocks.front() {
                 match block.prevhash {
                     None => return Err(AppError::NotEnoughBlocks),
                     Some(ref hash) => hash.clone(),
@@ -121,7 +134,7 @@ impl State {
 
             // If block not found, try again if there is no blocks, otherwise blockchain corrupted
             if block.is_none() {
-                if self.blocks.is_empty() {
+                if blocks.is_empty() {
                     continue;
                 } else {
                     return Err(AppError::InvalidBlockchain);
@@ -130,7 +143,7 @@ impl State {
 
             // Check that chain is valid
             let block = StateBlock::from(block.unwrap());
-            if let Some(front) = self.blocks.front() {
+            if let Some(front) = blocks.front() {
                 if block.height + 1 != front.height {
                     return Err(AppError::InvalidBlockchain);
                 }
@@ -140,16 +153,16 @@ impl State {
             }
 
             // Add block
-            self.add_block(block, BlocksListSide::Front);
+            self.add_block(blocks, block, BlocksListSide::Front);
         }
 
         Ok(())
     }
 
     // Update our chain, return `true` if need call update again
-    async fn update_blocks(&mut self) -> AppResult<UpdateBlocksModified> {
+    async fn update_blocks(&self) -> AppResult<UpdateBlocksModified> {
         // We always keep blocks, so unwrap is safe
-        let mut last = self.blocks.back().unwrap();
+        let mut last = self.blocks.read().await.back().unwrap().to_owned();
 
         // Get bitcoind info
         let info_fut = self.bitcoind.getblockchaininfo();
@@ -162,8 +175,9 @@ impl State {
 
         // Remove blocks in our chain on reorg
         while last.height >= info.blocks {
-            self.remove_best_block().await?;
-            last = self.blocks.back().unwrap();
+            let mut blocks = self.blocks.write().await;
+            self.remove_best_block(&mut blocks).await?;
+            last = blocks.back().unwrap().to_owned();
         }
 
         // Add maximum 1 block
@@ -178,10 +192,11 @@ impl State {
 
             // If previoush hash match to our best hash in new block, add it
             // Otherwise remove our best block
+            let mut blocks = self.blocks.write().await;
             if block.prevhash.as_ref().unwrap() == &last.hash {
-                self.add_block(block, BlocksListSide::Back);
+                self.add_block(&mut blocks, block, BlocksListSide::Back);
             } else {
-                self.remove_best_block().await?;
+                self.remove_best_block(&mut blocks).await?;
             }
         }
 
@@ -190,7 +205,7 @@ impl State {
     }
 
     pub async fn get_block_tip(&self) -> Result<Option<json::Block>, Box<dyn StdError>> {
-        let hash = self.blocks.back().unwrap().hash.clone();
+        let hash = self.blocks.read().await.back().unwrap().hash.clone();
         self.get_block_by_hash(&hash).await
     }
 
@@ -216,7 +231,7 @@ impl State {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StateBlock {
     pub height: u32,
     pub hash: String,

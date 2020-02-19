@@ -1,5 +1,3 @@
-#![feature(get_mut_unchecked)]
-
 #[macro_use]
 extern crate quick_error;
 
