@@ -1,11 +1,12 @@
-use std::collections::LinkedList;
+use std::collections::{HashMap, LinkedList};
 use std::error::Error as StdError;
 use std::time::{Duration, SystemTime};
 
 use log::info;
 use tokio::sync::RwLock;
 
-use super::bitcoind::{json::ResponseBlock, Bitcoind, BitcoindError};
+use super::bitcoind::json::{ResponseBlock, ResponseRawMempoolTransaction};
+use super::bitcoind::{Bitcoind, BitcoindError};
 use super::error::{AppError, AppResult};
 use super::json;
 use crate::signals::ShutdownReceiver;
@@ -18,6 +19,7 @@ const UPDATE_DELAY_MIN: Duration = Duration::from_millis(5);
 pub struct State {
     bitcoind: Bitcoind,
     blocks: RwLock<LinkedList<StateBlock>>,
+    mempool: RwLock<HashMap<String, StateTransaction>>,
 }
 
 impl State {
@@ -25,6 +27,7 @@ impl State {
         State {
             bitcoind,
             blocks: RwLock::new(LinkedList::new()),
+            mempool: RwLock::new(HashMap::new()),
         }
     }
 
@@ -49,6 +52,9 @@ impl State {
                 continue;
             }
 
+            // Update mempool
+            self.update_mempool().await?;
+
             // Some delay if blocks chain was not modified
             let elapsed = ts.elapsed().unwrap();
             let sleep_duration = match UPDATE_DELAY_MAX.checked_sub(elapsed) {
@@ -67,7 +73,7 @@ impl State {
     }
 
     // Add block to our chain
-    fn add_block(
+    async fn add_block(
         &self,
         blocks: &mut LinkedList<StateBlock>,
         block: StateBlock,
@@ -86,6 +92,11 @@ impl State {
             }
         };
         info!("Add block {}: {}", block.height, &block.hash);
+
+        let mut mempool = self.mempool.write().await;
+        for hash in block.transactions.iter() {
+            mempool.remove(hash);
+        }
     }
 
     fn remove_blocks(&self, blocks: &mut LinkedList<StateBlock>, side: BlocksListSide) {
@@ -153,7 +164,7 @@ impl State {
             }
 
             // Add block
-            self.add_block(blocks, block, BlocksListSide::Front);
+            self.add_block(blocks, block, BlocksListSide::Front).await;
         }
 
         Ok(())
@@ -194,7 +205,8 @@ impl State {
             // Otherwise remove our best block
             let mut blocks = self.blocks.write().await;
             if block.prevhash.as_ref().unwrap() == &last.hash {
-                self.add_block(&mut blocks, block, BlocksListSide::Back);
+                self.add_block(&mut blocks, block, BlocksListSide::Back)
+                    .await;
             } else {
                 self.remove_best_block(&mut blocks).await?;
             }
@@ -202,6 +214,28 @@ impl State {
 
         // Will force call `update_blocks` again immediately
         Ok(UpdateBlocksModified::Yes)
+    }
+
+    async fn update_mempool(&self) -> AppResult<()> {
+        let mempool_fut = self.bitcoind.getrawmempool();
+        let mempool = mempool_fut.await.map_err(AppError::Bitcoind)?;
+
+        let mut current = self.mempool.write().await;
+        let hashes: Vec<String> = current
+            .iter()
+            .filter(|x| !mempool.contains_key(x.0))
+            .map(|x| x.0.clone())
+            .collect();
+        for hash in hashes {
+            current.remove(&hash);
+        }
+        for (hash, data) in mempool.into_iter() {
+            if !current.contains_key(&hash) {
+                current.insert(hash, data.into());
+            }
+        }
+
+        Ok(())
     }
 
     pub async fn get_block_tip(&self) -> Result<Option<json::Block>, Box<dyn StdError>> {
@@ -229,6 +263,17 @@ impl State {
             }
         }
     }
+
+    pub async fn get_mempool(&self) -> Result<Vec<json::Transaction>, Box<dyn StdError>> {
+        let mempool = self.mempool.read().await;
+        Ok(mempool
+            .iter()
+            .map(|(hash, tx)| json::Transaction {
+                hash: hash.to_owned(),
+                size: tx.size,
+            })
+            .collect())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -236,15 +281,28 @@ pub struct StateBlock {
     pub height: u32,
     pub hash: String,
     pub prevhash: Option<String>,
+    pub transactions: Vec<String>,
 }
 
 impl From<ResponseBlock> for StateBlock {
     fn from(block: ResponseBlock) -> Self {
         StateBlock {
             height: block.height,
-            hash: block.hash.clone(),
+            hash: block.hash,
             prevhash: block.previousblockhash,
+            transactions: block.transactions.into_iter().map(|t| t.hash).collect(),
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct StateTransaction {
+    pub size: u32,
+}
+
+impl From<ResponseRawMempoolTransaction> for StateTransaction {
+    fn from(tx: ResponseRawMempoolTransaction) -> Self {
+        StateTransaction { size: tx.size }
     }
 }
 

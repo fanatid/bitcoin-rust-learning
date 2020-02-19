@@ -6,7 +6,7 @@ use log::info;
 use url::Url;
 
 pub use self::error::{BitcoindError, BitcoindResult};
-use self::json::{ResponseBlock, ResponseBlockchainInfo};
+use self::json::{ResponseBlock, ResponseBlockchainInfo, ResponseRawMempool};
 use self::rest::RESTClient;
 use self::rpc::RPCClient;
 
@@ -126,5 +126,9 @@ impl Bitcoind {
 
     pub async fn getblockbyhash(&self, hash: &str) -> BitcoindResult<Option<ResponseBlock>> {
         self.rest.getblock(hash).await
+    }
+
+    pub async fn getrawmempool(&self) -> BitcoindResult<ResponseRawMempool> {
+        self.rpc.getrawmempool().await
     }
 }

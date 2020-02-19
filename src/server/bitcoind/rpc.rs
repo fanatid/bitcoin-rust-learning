@@ -6,7 +6,8 @@ use reqwest::{header, redirect, Client, ClientBuilder};
 use tokio::sync::Mutex;
 use url::Url;
 
-use super::{json::*, BitcoindError, BitcoindResult};
+use super::error::{BitcoindError, BitcoindResult};
+use super::json::{Request, Response, ResponseBlockchainInfo, ResponseRawMempool};
 
 pub struct RPCClient {
     client: Client,
@@ -118,5 +119,10 @@ impl RPCClient {
             }
             Err(error) => Err(error),
         }
+    }
+
+    pub async fn getrawmempool(&self) -> BitcoindResult<ResponseRawMempool> {
+        let params = [true.into()];
+        self.call("getrawmempool", Some(&params)).await
     }
 }

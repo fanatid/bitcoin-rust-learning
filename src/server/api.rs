@@ -45,13 +45,13 @@ async fn handle_request(state: Arc<State>, req: Request<Body>) -> ReqResult {
     let path = req.uri().path().to_string();
 
     if method == Method::GET && path == "/mempool" {
-        return get_mempool().await;
+        return get_mempool(state).await;
     }
 
     let re = Regex::new(r"^/block/([0-9a-f]{4}|\d+|tip)$").unwrap();
     let caps = re.captures(&path);
     if method == Method::GET && caps.is_some() {
-        return get_block(state, req, caps.unwrap()).await;
+        return get_block(state, caps.unwrap()).await;
     }
 
     let resp = Response::builder()
@@ -70,11 +70,13 @@ async fn handle_request(state: Arc<State>, req: Request<Body>) -> ReqResult {
 //         .unwrap())
 // }
 
-async fn get_mempool() -> ReqResult {
-    Ok(Response::new(Body::from("TODO")))
+async fn get_mempool(state: Arc<State>) -> ReqResult {
+    let mempool = state.get_mempool().await;
+    let data = serde_json::to_string(&mempool.unwrap()).unwrap();
+    Ok(Response::new(Body::from(data)))
 }
 
-async fn get_block<'t>(state: Arc<State>, req: Request<Body>, caps: Captures<'t>) -> ReqResult {
+async fn get_block<'t>(state: Arc<State>, caps: Captures<'t>) -> ReqResult {
     let id = caps.get(1).unwrap().as_str();
     let block = if id == "tip" {
         state.get_block_tip().await

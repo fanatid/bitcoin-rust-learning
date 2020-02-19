@@ -1,5 +1,7 @@
-use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt;
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize)]
 pub struct Request<'a, 'b> {
@@ -52,5 +54,13 @@ pub struct ResponseBlock {
 #[derive(Debug, Deserialize)]
 pub struct ResponseBlockTransaction {
     pub hash: String,
+    pub size: u32,
+}
+
+pub type ResponseRawMempool = HashMap<String, ResponseRawMempoolTransaction>;
+
+#[derive(Debug, Deserialize)]
+pub struct ResponseRawMempoolTransaction {
+    #[serde(rename = "vsize")]
     pub size: u32,
 }
