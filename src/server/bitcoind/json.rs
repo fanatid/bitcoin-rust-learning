@@ -44,4 +44,13 @@ pub struct ResponseBlock {
     pub hash: String,
     pub height: u32,
     pub previousblockhash: Option<String>,
+    pub size: u32,
+    #[serde(rename = "tx")]
+    pub transactions: Vec<ResponseBlockTransaction>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ResponseBlockTransaction {
+    pub hash: String,
+    pub size: u32,
 }

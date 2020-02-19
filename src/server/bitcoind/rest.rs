@@ -5,7 +5,7 @@
 use std::fmt;
 use std::time::Duration;
 
-use reqwest::{header, redirect, Client, ClientBuilder};
+use reqwest::{header, redirect, Client, ClientBuilder, RequestBuilder};
 use url::Url;
 
 use super::{json::*, BitcoindError, BitcoindResult};
@@ -24,7 +24,7 @@ impl fmt::Debug for RESTClient {
 }
 
 impl RESTClient {
-    pub fn new(url: Url) -> BitcoindResult<RESTClient> {
+    pub fn new(url: Url) -> BitcoindResult<Self> {
         let mut headers = header::HeaderMap::with_capacity(1);
         headers.insert(
             header::CONTENT_TYPE,
@@ -44,11 +44,16 @@ impl RESTClient {
         })
     }
 
-    pub async fn getblockchaininfo(&mut self) -> BitcoindResult<ResponseBlockchainInfo> {
-        self.url.set_path("rest/chaininfo.json");
+    fn request(&self, path: &str) -> RequestBuilder {
+        let mut url = self.url.clone();
+        url.set_path(path);
+        self.client.get(url)
+    }
+
+    pub async fn getblockchaininfo(&self) -> BitcoindResult<ResponseBlockchainInfo> {
         let timeout = Duration::from_millis(200);
 
-        let res_fut = self.client.get(self.url.clone()).timeout(timeout).send();
+        let res_fut = self.request("rest/chaininfo.json").timeout(timeout).send();
         let res = res_fut.await.map_err(BitcoindError::Reqwest)?;
         let status_code = res.status().as_u16();
 
@@ -63,9 +68,8 @@ impl RESTClient {
         }
     }
 
-    pub async fn getblock(&mut self, hash: &str) -> BitcoindResult<Option<ResponseBlock>> {
-        self.url.set_path(&format!("rest/block/{}.json", hash));
-        let res_fut = self.client.get(self.url.clone()).send();
+    pub async fn getblock(&self, hash: &str) -> BitcoindResult<Option<ResponseBlock>> {
+        let res_fut = self.request(&format!("rest/block/{}.json", hash)).send();
         let res = res_fut.await.map_err(BitcoindError::Reqwest)?;
 
         let status_code = res.status().as_u16();

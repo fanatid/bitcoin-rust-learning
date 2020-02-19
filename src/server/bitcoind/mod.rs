@@ -6,7 +6,7 @@ use log::info;
 use url::Url;
 
 pub use self::error::{BitcoindError, BitcoindResult};
-use self::json::*;
+use self::json::{ResponseBlock, ResponseBlockchainInfo};
 use self::rest::RESTClient;
 use self::rpc::RPCClient;
 
@@ -58,12 +58,12 @@ impl Bitcoind {
         Ok((parsed, auth))
     }
 
-    pub async fn validate(&mut self) -> BitcoindResult<()> {
+    pub async fn validate(&self) -> BitcoindResult<()> {
         self.validate_client_initialized().await?;
         self.validate_clients_to_same_node().await
     }
 
-    async fn validate_client_initialized(&mut self) -> BitcoindResult<()> {
+    async fn validate_client_initialized(&self) -> BitcoindResult<()> {
         let mut ts = SystemTime::now();
         let mut last_message = "".to_owned();
 
@@ -92,7 +92,7 @@ impl Bitcoind {
         }
     }
 
-    async fn validate_clients_to_same_node(&mut self) -> BitcoindResult<()> {
+    async fn validate_clients_to_same_node(&self) -> BitcoindResult<()> {
         let rpc_fut = self.rpc.getblockchaininfo();
         let rest_fut = self.rest.getblockchaininfo();
         let (rpc, rest) = tokio::try_join!(rpc_fut, rest_fut)?;
@@ -103,11 +103,11 @@ impl Bitcoind {
         }
     }
 
-    pub async fn getblockchaininfo(&mut self) -> BitcoindResult<ResponseBlockchainInfo> {
+    pub async fn getblockchaininfo(&self) -> BitcoindResult<ResponseBlockchainInfo> {
         self.rpc.getblockchaininfo().await
     }
 
-    pub async fn getblockbyheight(&mut self, height: u32) -> BitcoindResult<Option<ResponseBlock>> {
+    pub async fn getblockbyheight(&self, height: u32) -> BitcoindResult<Option<ResponseBlock>> {
         let hash = self.rpc.getblockhash(height).await?;
         match hash {
             Some(hash) => match self.getblockbyhash(&hash).await? {
@@ -124,7 +124,7 @@ impl Bitcoind {
         }
     }
 
-    pub async fn getblockbyhash(&mut self, hash: &str) -> BitcoindResult<Option<ResponseBlock>> {
+    pub async fn getblockbyhash(&self, hash: &str) -> BitcoindResult<Option<ResponseBlock>> {
         self.rest.getblock(hash).await
     }
 }

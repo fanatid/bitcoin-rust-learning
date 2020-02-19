@@ -1,7 +1,9 @@
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::{header, redirect, Client, ClientBuilder};
+use tokio::sync::Mutex;
 use url::Url;
 
 use super::{json::*, BitcoindError, BitcoindResult};
@@ -9,7 +11,7 @@ use super::{json::*, BitcoindError, BitcoindResult};
 pub struct RPCClient {
     client: Client,
     url: Url,
-    req_id: u64,
+    req_id: Arc<Mutex<u64>>,
 }
 
 impl fmt::Debug for RPCClient {
@@ -23,7 +25,7 @@ impl fmt::Debug for RPCClient {
 
 impl RPCClient {
     // Construct new RPCClient for specified URL
-    pub fn new(url: Url, auth: Vec<u8>) -> BitcoindResult<RPCClient> {
+    pub fn new(url: Url, auth: Vec<u8>) -> BitcoindResult<Self> {
         let mut headers = header::HeaderMap::with_capacity(2);
         headers.insert(
             header::AUTHORIZATION,
@@ -45,8 +47,14 @@ impl RPCClient {
         Ok(RPCClient {
             client: client.build().map_err(BitcoindError::Reqwest)?,
             url,
-            req_id: 0,
+            req_id: Arc::new(Mutex::new(0)),
         })
+    }
+
+    async fn get_next_req_id(&self) -> u64 {
+        let mut req_id = self.req_id.lock().await;
+        *req_id = req_id.wrapping_add(1);
+        *req_id
     }
 
     async fn request<T: serde::de::DeserializeOwned>(
@@ -66,12 +74,11 @@ impl RPCClient {
     }
 
     async fn call<T: serde::de::DeserializeOwned>(
-        &mut self,
+        &self,
         method: &str,
         params: Option<&[serde_json::Value]>,
     ) -> BitcoindResult<T> {
-        let req_id = self.req_id;
-        self.req_id = self.req_id.wrapping_add(1);
+        let req_id = self.get_next_req_id().await;
 
         let body = serde_json::to_vec(&Request {
             method,
@@ -93,11 +100,11 @@ impl RPCClient {
         }
     }
 
-    pub async fn getblockchaininfo(&mut self) -> BitcoindResult<ResponseBlockchainInfo> {
+    pub async fn getblockchaininfo(&self) -> BitcoindResult<ResponseBlockchainInfo> {
         self.call("getblockchaininfo", None).await
     }
 
-    pub async fn getblockhash(&mut self, height: u32) -> BitcoindResult<Option<String>> {
+    pub async fn getblockhash(&self, height: u32) -> BitcoindResult<Option<String>> {
         let params = [height.into()];
         match self.call::<String>("getblockhash", Some(&params)).await {
             Ok(hash) => Ok(Some(hash)),

@@ -1,4 +1,5 @@
 use std::net::{SocketAddr, ToSocketAddrs as _};
+use std::sync::Arc;
 
 use clap::ArgMatches;
 use log::error;
@@ -13,6 +14,7 @@ use crate::signals;
 mod api;
 mod bitcoind;
 mod error;
+mod json;
 mod state;
 
 // Initialize logging and execute run function
@@ -45,11 +47,11 @@ async fn run<'a>(args: &ArgMatches<'a>) -> AppResult<()> {
 
     // Create and validate bitcoind
     let bitcoind_url = args.value_of("bitcoind").unwrap();
-    let mut bitcoind = Bitcoind::new(bitcoind_url).map_err(AppError::Bitcoind)?;
+    let bitcoind = Bitcoind::new(bitcoind_url).map_err(AppError::Bitcoind)?;
     bitcoind.validate().await.map_err(AppError::Bitcoind)?;
 
     // Create state
-    let mut state = State::new(bitcoind);
+    let mut state = Arc::new(State::new(bitcoind));
 
     // Parse host:port
     let listen_arg = args.value_of("listen").unwrap();
@@ -62,8 +64,12 @@ async fn run<'a>(args: &ArgMatches<'a>) -> AppResult<()> {
         })
         .ok_or(AppError::ListenHostPortNotFound)?;
     // Start HTTP/WS server
-    run_server(listen_addr, shutdown.clone())?;
+    run_server(listen_addr, state.clone(), shutdown.clone())?;
 
     // Run watch loop and block runtime
-    state.run_update_loop(shutdown.clone()).await
+    unsafe {
+        Arc::get_mut_unchecked(&mut state)
+            .run_update_loop(shutdown.clone())
+            .await
+    }
 }

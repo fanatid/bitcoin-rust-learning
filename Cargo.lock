@@ -64,6 +64,7 @@ dependencies = [
  "hyper",
  "log",
  "quick-error",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",

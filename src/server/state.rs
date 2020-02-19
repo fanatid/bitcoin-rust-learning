@@ -1,10 +1,12 @@
 use std::collections::LinkedList;
+use std::error::Error as StdError;
 use std::time::{Duration, SystemTime};
 
 use log::info;
 
-use super::bitcoind::{json::ResponseBlock, Bitcoind};
+use super::bitcoind::{json::ResponseBlock, Bitcoind, BitcoindError};
 use super::error::{AppError, AppResult};
+use super::json;
 use crate::signals::ShutdownReceiver;
 
 const APP_BLOCKS_MINIMUM: usize = 6;
@@ -14,11 +16,11 @@ const UPDATE_DELAY_MIN: Duration = Duration::from_millis(5);
 #[derive(Debug)]
 pub struct State {
     bitcoind: Bitcoind,
-    blocks: LinkedList<Block>,
+    blocks: LinkedList<StateBlock>,
 }
 
 impl State {
-    pub fn new(bitcoind: Bitcoind) -> State {
+    pub fn new(bitcoind: Bitcoind) -> Self {
         State {
             bitcoind,
             blocks: LinkedList::new(),
@@ -61,7 +63,7 @@ impl State {
     }
 
     // Add block to our chain
-    fn add_block(&mut self, block: Block, side: BlocksListSide) {
+    fn add_block(&mut self, block: StateBlock, side: BlocksListSide) {
         let block = match side {
             BlocksListSide::Front => {
                 self.remove_blocks(BlocksListSide::Back);
@@ -127,7 +129,7 @@ impl State {
             };
 
             // Check that chain is valid
-            let block = Block::from(block.unwrap());
+            let block = StateBlock::from(block.unwrap());
             if let Some(front) = self.blocks.front() {
                 if block.height + 1 != front.height {
                     return Err(AppError::InvalidBlockchain);
@@ -167,7 +169,7 @@ impl State {
         // Add maximum 1 block
         let block_fut = self.bitcoind.getblockbyheight(last.height + 1);
         if let Some(block) = block_fut.await.map_err(AppError::Bitcoind)? {
-            let block = Block::from(block);
+            let block = StateBlock::from(block);
 
             // If next block do not have previous blockhash, something wrong with blockchain
             if block.prevhash.is_none() {
@@ -186,18 +188,44 @@ impl State {
         // Will force call `update_blocks` again immediately
         Ok(UpdateBlocksModified::Yes)
     }
+
+    pub async fn get_block_tip(&self) -> Result<Option<json::Block>, Box<dyn StdError>> {
+        let hash = self.blocks.back().unwrap().hash.clone();
+        self.get_block_by_hash(&hash).await
+    }
+
+    pub async fn get_block_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<json::Block>, Box<dyn StdError>> {
+        let block = self.bitcoind.getblockbyhash(hash).await?;
+        Ok(block.map(|blk| blk.into()))
+    }
+
+    pub async fn get_block_by_height(
+        &self,
+        height: u32,
+    ) -> Result<Option<json::Block>, Box<dyn StdError>> {
+        loop {
+            match self.bitcoind.getblockbyheight(height).await {
+                Ok(block) => return Ok(block.map(|blk| blk.into())),
+                Err(BitcoindError::ResultMismatch) => {}
+                Err(e) => return Err(e.into()),
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
-pub struct Block {
+pub struct StateBlock {
     pub height: u32,
     pub hash: String,
     pub prevhash: Option<String>,
 }
 
-impl From<ResponseBlock> for Block {
+impl From<ResponseBlock> for StateBlock {
     fn from(block: ResponseBlock) -> Self {
-        Block {
+        StateBlock {
             height: block.height,
             hash: block.hash.clone(),
             prevhash: block.previousblockhash,
