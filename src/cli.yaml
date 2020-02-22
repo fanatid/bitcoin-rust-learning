@@ -9,20 +9,21 @@ subcommands:
   - client:
       about: Run WS client for transactions monitoring
       args:
-        - transactions:
-            help: Subscribe on transactions events
-            short: t
-            long: transactions
-        - blocks:
-            help: Subscribe on blocks events
-            short: b
-            long: blocks
+        - url:
+            help: Server URL
+            required: true
+            short: u
+            long: url
+            takes_value: true
+            env: URL
+            default_value: ws://localhost:8000/ws
   - server:
       about: Run monitoring server
       args:
         - bitcoind:
             help: Bitcoind RPC
             required: true
+            short: b
             long: bitcoind
             takes_value: true
             env: BITCOIND
@@ -30,6 +31,7 @@ subcommands:
         - listen:
             help: Listen host:port for HTTP and WebSocket requests
             required: true
+            short: l
             long: listen
             takes_value: true
             env: LISTEN

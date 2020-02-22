@@ -3,7 +3,8 @@ use std::error::Error as StdError;
 use std::time::{Duration, SystemTime};
 
 use log::info;
-use tokio::sync::RwLock;
+use tokio::sync::{broadcast, RwLock};
+use tokio_tungstenite::tungstenite::protocol::Message;
 
 use super::bitcoind::json::{ResponseBlock, ResponseRawMempoolTransaction};
 use super::bitcoind::{Bitcoind, BitcoindError};
@@ -21,6 +22,7 @@ pub struct State {
     bitcoind: Bitcoind,
     blocks: RwLock<LinkedList<StateBlock>>,
     mempool: RwLock<StateMempool>,
+    events: broadcast::Sender<Message>,
 }
 
 impl State {
@@ -34,6 +36,7 @@ impl State {
                 added: 0,
                 removed: 0,
             }),
+            events: broadcast::channel(10_000).0,
         }
     }
 
@@ -104,6 +107,7 @@ impl State {
             if mempool.transactions.contains_key(hash) {
                 confirmed += 1;
                 mempool.transactions.remove(hash);
+                self.send_tx_event(EventsMempoolTx::Confirmed, &hash);
             }
         }
 
@@ -251,14 +255,15 @@ impl State {
         mempool.removed += hashes.len();
         for hash in hashes {
             mempool.transactions.remove(&hash);
+            self.send_tx_event(EventsMempoolTx::Removed, &hash);
         }
 
         mempool.added += mempool_new.len() - mempool.transactions.len();
         for (hash, data) in mempool_new.into_iter() {
-            mempool
-                .transactions
-                .entry(hash)
-                .or_insert_with(|| data.into());
+            mempool.transactions.entry(hash.clone()).or_insert_with(|| {
+                self.send_tx_event(EventsMempoolTx::Added, &hash);
+                data.into()
+            });
         }
 
         if mempool.last_log.is_none()
@@ -276,6 +281,13 @@ impl State {
         }
 
         Ok(())
+    }
+
+    fn send_tx_event(&self, event: EventsMempoolTx, hash: &str) {
+        if self.events.receiver_count() > 0 {
+            let msg = format!("{:?} tx: {}", event, hash);
+            let _ = self.events.send(Message::text(msg));
+        }
     }
 
     pub async fn get_block_tip(&self) -> Result<Option<json::Block>, Box<dyn StdError>> {
@@ -313,6 +325,10 @@ impl State {
                 size: tx.size,
             })
             .collect())
+    }
+
+    pub fn get_events_receiver(&self) -> broadcast::Receiver<Message> {
+        self.events.subscribe()
     }
 }
 
@@ -364,4 +380,11 @@ enum BlocksListSide {
 enum UpdateBlocksModified {
     Yes,
     No,
+}
+
+#[derive(Debug, PartialEq)]
+enum EventsMempoolTx {
+    Added,
+    Confirmed,
+    Removed,
 }

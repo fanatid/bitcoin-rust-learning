@@ -2,10 +2,13 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use futures::sink::SinkExt as _;
+use futures::stream::StreamExt as _;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Method, Request, Response, Server, StatusCode};
-use log::info;
+use log::{error, info};
 use regex::{Captures, Regex};
+use tokio_tungstenite::{tungstenite::protocol, WebSocketStream};
 
 use super::error::{AppError, AppResult};
 use super::state::State;
@@ -54,6 +57,10 @@ async fn handle_request(state: Arc<State>, req: Request<Body>) -> ReqResult {
         return get_block(state, caps.unwrap()).await;
     }
 
+    if method == Method::GET && path == "/ws" {
+        return on_ws(state, req).await;
+    }
+
     let resp = Response::builder()
         .status(StatusCode::NOT_FOUND)
         .body(Body::from("Not Found"))
@@ -89,4 +96,41 @@ async fn get_block<'t>(state: Arc<State>, caps: Captures<'t>) -> ReqResult {
 
     let data = serde_json::to_string(&block.unwrap().unwrap()).unwrap();
     Ok(Response::new(Body::from(data)))
+}
+
+async fn on_ws(state: Arc<State>, req: Request<Body>) -> ReqResult {
+    let (req_parts, body) = req.into_parts();
+    let ws_req = Request::from_parts(req_parts, ());
+    match tokio_tungstenite::tungstenite::handshake::server::create_response(&ws_req) {
+        Ok(resp) => {
+            tokio::spawn(async move {
+                let ws = match body.on_upgrade().await {
+                    Ok(upgraded) => {
+                        WebSocketStream::from_raw_socket(upgraded, protocol::Role::Server, None)
+                            .await
+                    }
+                    Err(e) => {
+                        error!("upgrade error: {}", e);
+                        return;
+                    }
+                };
+                let (mut writer, _) = ws.split();
+                let mut rx = state.get_events_receiver();
+                while let Ok(msg) = rx.recv().await {
+                    if writer.send(msg).await.is_err() {
+                        break;
+                    }
+                }
+            });
+
+            let resp = Response::from_parts(resp.into_parts().0, Body::empty());
+            Ok(resp)
+        }
+        Err(err) => {
+            let msg = format!("{}", err);
+            let mut resp = Response::new(Body::from(msg));
+            *resp.status_mut() = StatusCode::BAD_REQUEST;
+            Ok(resp)
+        }
+    }
 }
