@@ -8,12 +8,12 @@ What I'd like to do:
 
 - Server
 
-    - [ ] HTTP method for receive transactions in block, form: `[{txid, size}]`
-    - [ ] HTTP method for receive transactions in mempool, form: `[{txid, size}]`
-    - [ ] WebSocket connection with sending: 1) transaction statuses: `new`, `removed`, `confirmed` 2) block statuses: `add`, `reverted`
+    - [x] HTTP method for receive transactions in block, form: `[{txid, size}]`
+    - [x] HTTP method for receive transactions in mempool, form: `[{txid, size}]`
+    - [x] WebSocket connection with sending transaction statuses: `added`, `removed`, `confirmed`
 
 - Client
 
-    - [ ] WebSocket connection with received 1) transaction statuses 2) block statuses
+    - [x] WebSocket connection with receiving transaction statuses
 
-**Work in progress.** A lot of things can looks like shit, if you see that something can be improved please email me or create an issue.
+<del>**Work in progress.**</del> A lot of things can looks like shit, if you see that something can be improved please email me or create an issue.
